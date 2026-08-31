@@ -2098,52 +2098,135 @@ export default function App() {
 
   // Waiting-for-device shell -- shown while discovery runs and nothing is selected yet
   // Must be AFTER addC1/doScan/scanning are defined (they're used inside)
-  // ── Discovery WebSocket: receives device_found / device_updated for all C1s ──
+  // ── Discovery WebSocket with auto-reconnect ────────────────────────────
   useEffect(() => {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws/_discovery`);
-    ws.onopen = () => addLog("INFO", "Discovery WS connected");
-    ws.onmessage = (evt) => {
-      try {
-        const msg = JSON.parse(evt.data);
-        if (msg.type === "device_list") {
-          // Server snapshot on WS connect -- merge into list and auto-select first
-          const incoming = (msg.devices || []).filter(d => d.ip);
-          if (incoming.length === 0) return;
-          setC1List(prev => {
-            const existingIps = new Set(prev.map(u => u.ip));
-            const fresh = incoming.filter(d => !existingIps.has(d.ip)).map(d => _mkC1FromDevice(d));
-            const updated = prev.map(u => {
-              const match = incoming.find(d => d.ip === u.ip);
-              return match ? _applyDeviceInfo(u, match) : u;
-            });
-            const next = [...updated, ...fresh];
-            return next;
-          });
+    let ws = null;
+    let dead = false;
+    let retryMs = 500;
 
-        } else if (msg.type === "device_found" || msg.type === "device_updated") {
-          const d = msg.device;
-          if (!d?.ip) return;
-          addLog("INFO", `Device ${msg.type === "device_found" ? "found" : "updated"}: ${d.ip} ${d.mac || ""} fw=${d.firmware || "?"}`);
-          setC1List(prev => {
-            const idx = prev.findIndex(u => u.ip === d.ip);
-            if (idx >= 0) {
-              const next = [...prev];
-              next[idx] = _applyDeviceInfo(next[idx], d);
-              return next;
-            }
-            const newUnit = _mkC1FromDevice(d);
-            // Auto-select if this is the first device
-            if (prev.length === 0) setSelectedC1(newUnit.id);
-            return [...prev, newUnit];
-          });
+    function applyDeviceSynced(device_ip, liveConfig, summary) {
+      addLog("ACK", `Synced ${device_ip}: ${summary?.levels ?? 0} levels, ${summary?.triggers ?? 0} triggers, fw=${summary?.firmware ?? "?"}`);
+      setC1List(prev => {
+        const idx = prev.findIndex(u => u.ip === device_ip);
+        if (idx < 0) {
+          const newUnit = _mkC1FromDevice({ ip: device_ip, ...liveConfig });
+          newUnit.config = { ...newUnit.config, ...liveConfig, devices: newUnit.config?.devices ?? liveConfig.devices };
+          setSelectedC1(cur => cur ?? newUnit.id);
+          return [...prev, newUnit];
         }
-      } catch {}
-    };
-    ws.onclose = () => addLog("INFO", "Discovery WS closed");
-    return () => ws.close();
+        const next = [...prev];
+        const existing = next[idx];
+        next[idx] = {
+          ...existing,
+          name:     liveConfig.deviceName || existing.name,
+          mac:      liveConfig.mac        || existing.mac,
+          firmware: liveConfig.firmwareVersion || existing.firmware,
+          config:   { ...existing.config, ...liveConfig, devices: existing.config?.devices ?? liveConfig.devices },
+        };
+        return next;
+      });
+    }
+
+    function connect() {
+      if (dead) return;
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${window.location.host}/ws/_discovery`);
+
+      ws.onopen = () => { addLog("INFO", "Discovery WS connected"); retryMs = 500; };
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === "device_list") {
+            const incoming = (msg.devices || []).filter(d => d.ip);
+            if (!incoming.length) return;
+            setC1List(prev => {
+              const existingIps = new Set(prev.map(u => u.ip));
+              const fresh = incoming.filter(d => !existingIps.has(d.ip)).map(d => _mkC1FromDevice(d));
+              const updated = prev.map(u => { const m = incoming.find(d => d.ip === u.ip); return m ? _applyDeviceInfo(u, m) : u; });
+              const next = [...updated, ...fresh];
+              if (next.length > 0) setSelectedC1(cur => cur ?? next[0].id);
+              return next;
+            });
+          } else if (msg.type === "device_found" || msg.type === "device_updated") {
+            const d = msg.device;
+            if (!d?.ip) return;
+            addLog("INFO", `Device ${msg.type === "device_found" ? "found" : "updated"}: ${d.ip} ${d.mac || ""} fw=${d.firmware || "?"}`);
+            setC1List(prev => {
+              const idx = prev.findIndex(u => u.ip === d.ip);
+              if (idx >= 0) { const next = [...prev]; next[idx] = _applyDeviceInfo(next[idx], d); return next; }
+              const newUnit = _mkC1FromDevice(d);
+              if (prev.length === 0) setSelectedC1(newUnit.id);
+              return [...prev, newUnit];
+            });
+          } else if (msg.type === "device_synced") {
+            const { device_ip, config: liveConfig, summary } = msg;
+            if (device_ip && liveConfig) applyDeviceSynced(device_ip, liveConfig, summary);
+          } else if (msg.type === "sync_log") {
+            if (msg.msg?.startsWith("===") || msg.msg?.startsWith("OK")) {
+              addLog("INFO", `[${msg.device_ip}] ${msg.msg}`);
+            }
+          }
+        } catch {}
+      };
+
+      ws.onclose = () => { if (!dead) { setTimeout(connect, retryMs); retryMs = Math.min(retryMs * 2, 8000); } };
+      ws.onerror = () => ws.close();
+    }
+
+    connect();
+    return () => { dead = true; ws?.close(); };
   }, []);
 
+  // ── Explicit sync when a device is selected that hasn't loaded its config yet ──
+  useEffect(() => {
+    if (!selectedC1) return;
+    const unit = c1List.find(u => u.id === selectedC1);
+    if (!unit?.ip || unit.ip === "192.168.1.xxx") return;
+    // Already synced if the menu tree contains device-sourced entries (id starts with "dev_")
+    const hasDev = (node) => node?.id?.startsWith("dev_") ||
+      (node?.entries || []).some(hasDev);
+    if (hasDev(unit.config?.mainMenu) || hasDev(unit.config?.volMuteScreen)) return;
+
+    addLog("INFO", `Loading config from ${unit.ip}...`);
+    const ip = unit.ip;
+    fetch(`/api/device/${ip}/sync`, { method: "POST" })
+      .then(async res => {
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const ls = buf.split("\n"); buf = ls.pop();
+          for (const line of ls) {
+            if (!line.trim()) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (obj.result) {
+                const { ok, config: liveConfig, error, summary } = obj.result;
+                if (ok && liveConfig) {
+                  delete liveConfig.svToSlot; delete liveConfig.slotToSV;
+                  setC1List(prev => {
+                    const idx = prev.findIndex(u => u.ip === ip);
+                    if (idx < 0) return prev;
+                    const next = [...prev];
+                    const ex = next[idx];
+                    next[idx] = { ...ex, name: liveConfig.deviceName || ex.name,
+                      mac: liveConfig.mac || ex.mac, firmware: liveConfig.firmwareVersion || ex.firmware,
+                      config: { ...ex.config, ...liveConfig, devices: ex.config?.devices ?? liveConfig.devices } };
+                    return next;
+                  });
+                  addLog("ACK", `Config loaded: ${summary?.levels ?? 0} levels, ${summary?.triggers ?? 0} triggers`);
+                } else if (!ok) { addLog("ERR", `Sync failed: ${error}`); }
+              }
+            } catch {}
+          }
+        }
+      })
+      .catch(e => addLog("ERR", `Sync request failed: ${e.message}`));
+  }, [selectedC1]);
   // Sim panel -- extracted so it stays mounted regardless of tab
   const simPanel = (
     <div style={{ display:"flex",flexDirection:"column",alignItems:"center",padding:"20px 14px 14px",gap:14,overflowY:"auto",flex:1 }}>
