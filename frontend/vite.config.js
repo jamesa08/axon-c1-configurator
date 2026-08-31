@@ -6,16 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // REST API calls
-      "/api": {
-        target: "http://localhost:8080",
-        changeOrigin: true,
-      },
-      // WebSocket connections
-      "/ws": {
-        target: "ws://localhost:8080",
-        ws: true,
-      },
+      "/api": { target: "http://localhost:8080", changeOrigin: true },
+      "/ws":  { target: "ws://localhost:8080",   ws: true },
     },
   },
 });
