@@ -215,6 +215,7 @@ const mkDefaultConfig = () => {
     dhcp: true,
     staticIp: "", staticMask: "", staticGw: "",
     destIp: "192.168.1.10",
+    selfIp: "",   // host NIC to use for push (empty = auto-detect)
     destPort: 49500,
     // sim state
     simVol: -12,
@@ -725,7 +726,7 @@ function TreeItem({ entry, depth=0, selected, onSelect, onNavigate, index }) {
   return (
     <div
       onClick={() => onSelect(entry)}
-      onDoubleClick={() => isMenu && onNavigate(entry)}
+      onDoubleClick={e => { e.stopPropagation(); if (isMenu) onNavigate(entry); }}
       style={{
         display:"flex", alignItems:"center", gap:0,
         height:34, width:"100%",
@@ -952,8 +953,11 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
   const navPath = navState?.path ?? [];
 
   const [selected, setSelected]       = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set()); // multi-select set
   const [editingName, setEditingName] = useState(null);
   const [nameVal, setNameVal]         = useState("");
+  const [dragOver, setDragOver]       = useState(null); // id of drop target
+  const dragSrc = useRef(null);
 
   const devices    = config.devices;
   const defaultDev = devices[0]?.name || "QSC";
@@ -989,15 +993,23 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
     setSelected(entry);
   }, [config.volMuteScreen.id, setConfig, updateNode]);
 
-  const deleteEntry = useCallback((id) => {
-    const parentId = navPath.length ? navPath[navPath.length-1].id : null;
+  const deleteEntry = useCallback((id, idsToDelete = null) => {
+    const ids = idsToDelete ? new Set(idsToDelete) : new Set([id]);
     const removeFrom = (node) => {
       if (!node.entries) return node;
-      return { ...node, entries: node.entries.filter(e=>e.id!==id).map(removeFrom) };
+      return { ...node, entries: node.entries.filter(e=>!ids.has(e.id)).map(removeFrom) };
     };
+    // Select neighbor before deleting
+    const currentEntries = currentNode.entries || [];
+    if (ids.has(selected?.id)) {
+      const remaining = currentEntries.filter(e => !ids.has(e.id));
+      const deletedIdx = currentEntries.findIndex(e => ids.has(e.id));
+      const neighbor = remaining[Math.min(deletedIdx, remaining.length - 1)] ?? null;
+      setSelected(neighbor);
+    }
+    setSelectedIds(new Set());
     setConfig(c=>({ ...c, mainMenu: removeFrom(c.mainMenu) }));
-    if (selected?.id === id) setSelected(null);
-  }, [navPath, selected, setConfig]);
+  }, [currentNode, selected, setConfig]);
 
   // Next SV channel: count all level entries across tree
   const nextSVChannel = useCallback(() => {
@@ -1091,6 +1103,21 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
   const entries      = currentNode.entries || [];
   // Depth squares: 0 = root, 1 = mainMenu, 2+ = submenus
   const currentDepth = view === "root" ? 0 : navPath.length + 1;
+
+  // Auto-select first entry whenever the current node changes (navigation)
+  // Also clears any stale editingName from a previous level
+  useEffect(() => {
+    setEditingName(null);
+    if (showRoot) { setSelected(null); setSelectedIds(new Set()); return; }
+    const ents = currentNode.entries || [];
+    if (ents.length === 0) { setSelected(null); setSelectedIds(new Set()); return; }
+    const currentBelongs = ents.some(e => e.id === selected?.id);
+    if (!currentBelongs) {
+      setSelected(ents[0]);
+      setSelectedIds(new Set([ents[0].id]));
+      onSimCursorChange?.(0);
+    }
+  }, [currentNode, showRoot]);
   const depthColors  = [C.orange, C.blue, C.green, C.warn];
 
   // The "active" item in the tree is whichever was explicitly selected,
@@ -1105,6 +1132,76 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
   const commitEdit = (entry) => {
     updateEntry({ ...entry, display_txt: nameVal });
     setEditingName(null);
+  };
+
+  // Multi-select helpers
+  const selectOne = (entry, idx, e) => {
+    if (e.shiftKey && selected) {
+      // Range select between last selected and this one
+      const entries_ = currentNode.entries || [];
+      const fromIdx = entries_.findIndex(en => en.id === selected.id);
+      const toIdx   = idx;
+      const lo = Math.min(fromIdx, toIdx);
+      const hi = Math.max(fromIdx, toIdx);
+      const range = new Set(entries_.slice(lo, hi + 1).map(en => en.id));
+      setSelectedIds(range);
+    } else if (e.metaKey || e.ctrlKey) {
+      // Toggle this entry in/out of selection
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(entry.id)) next.delete(entry.id);
+        else next.add(entry.id);
+        return next;
+      });
+      setSelected(entry);
+    } else {
+      setSelectedIds(new Set([entry.id]));
+      setSelected(entry);
+    }
+  };
+
+  const deleteSelected = () => {
+    if (selectedIds.size > 1) {
+      deleteEntry(null, [...selectedIds]);
+    } else if (selected) {
+      deleteEntry(selected.id);
+    }
+  };
+
+  // Keyboard shortcuts: Delete/Backspace removes selected, Escape clears multi-select
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteSelected();
+      }
+      if (e.key === "Escape") setSelectedIds(new Set());
+      if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSelectedIds(new Set((currentNode.entries||[]).map(en=>en.id)));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, selectedIds, currentNode]);
+
+  // Drag reorder
+  const reorder = (fromId, toId) => {
+    if (fromId === toId) return;
+    const targetId = currentNode.id;
+    setConfig(c => ({
+      ...c,
+      mainMenu: updateNode(c.mainMenu, targetId, node => {
+        const es   = [...(node.entries || [])];
+        const fi   = es.findIndex(e => e.id === fromId);
+        const ti   = es.findIndex(e => e.id === toId);
+        if (fi < 0 || ti < 0) return node;
+        const [item] = es.splice(fi, 1);
+        es.splice(ti, 0, item);
+        return { ...node, entries: es };
+      }),
+    }));
   };
 
   // Move up/down within current level
@@ -1139,10 +1236,45 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
           }}>‹</button>
           <div style={{ flex:1, padding:"0 12px", background:C.s1, display:"flex",
             alignItems:"center", gap:8, height:"100%", overflow:"hidden" }}>
-            <span style={{ fontSize:12, fontWeight:600, color:C.text, overflow:"hidden",
-              textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
-              {showRoot ? "Root" : navPath.length === 0 ? "Main menu" : navPath[navPath.length-1].label}
-            </span>
+            {/* Main menu title -- inline editable when at root level */}
+            {!showRoot && navPath.length === 0 && editingName === "__mainmenu__" ? (
+              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value)}
+                onBlur={() => { setConfig(c=>({...c,mainMenu:{...c.mainMenu,display_txt:nameVal}})); setEditingName(null); }}
+                onKeyDown={e => {
+                  if (e.key==="Enter") { setConfig(c=>({...c,mainMenu:{...c.mainMenu,display_txt:nameVal}})); setEditingName(null); }
+                  if (e.key==="Escape") setEditingName(null);
+                }}
+                style={{ flex:1, background:"transparent", border:"none", outline:"none",
+                  fontSize:12, fontWeight:600, color:C.text, fontFamily:SANS }}
+              />
+            ) : !showRoot && navPath.length > 0 && editingName === "__currentmenu__" ? (
+              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value)}
+                onBlur={() => { updateEntry({...currentNode, display_txt: nameVal}); setEditingName(null); }}
+                onKeyDown={e => {
+                  if (e.key==="Enter") { updateEntry({...currentNode, display_txt: nameVal}); setEditingName(null); }
+                  if (e.key==="Escape") setEditingName(null);
+                }}
+                style={{ flex:1, background:"transparent", border:"none", outline:"none",
+                  fontSize:12, fontWeight:600, color:C.text, fontFamily:SANS }}
+              />
+            ) : (
+              <span
+                style={{ fontSize:12, fontWeight:600, color:C.text, overflow:"hidden",
+                  textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1,
+                  cursor: !showRoot ? "text" : "default" }}
+                onDoubleClick={() => {
+                  if (!showRoot && navPath.length === 0) {
+                    setEditingName("__mainmenu__");
+                    setNameVal(config.mainMenu.display_txt || "MAIN MENU");
+                  } else if (!showRoot && navPath.length > 0) {
+                    setEditingName("__currentmenu__");
+                    setNameVal(currentNode.display_txt || "");
+                  }
+                }}
+              >
+                {showRoot ? "Root" : navPath.length === 0 ? (config.mainMenu.display_txt || "MAIN MENU") : navPath[navPath.length-1].label}
+              </span>
+            )}
             {/* Depth squares inline */}
             <div style={{ display:"flex", gap:5, flexShrink:0 }}>
               {[1,2,3,4].map(i => {
@@ -1165,7 +1297,15 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
               })}
             </div>
           </div>
-          <button onClick={()=>selected&&startEdit({stopPropagation:()=>{}},selected)} style={{
+          <button onClick={() => {
+            if (!showRoot && navPath.length === 0) {
+              // Edit main menu name
+              setEditingName("__mainmenu__");
+              setNameVal(config.mainMenu.display_txt || "MAIN MENU");
+            } else if (selected) {
+              startEdit({stopPropagation:()=>{}}, selected);
+            }
+          }} style={{
             padding:"0 12px", height:"100%", background:C.s2, border:"none",
             borderLeft:`1px solid ${C.border}`,
             color:C.mid, cursor:"pointer", fontFamily:SANS, fontSize:11, flexShrink:0,
@@ -1245,8 +1385,23 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
               <span style={{ fontSize:9, color:config.menuEnabled ? C.dim : C.border, paddingRight:8 }}>{'>'}</span>
             </div>
           )}
-          {!showRoot && entries.map((entry,i)=>(
-            <div key={entry.id} style={{ borderBottom:`1px solid ${C.border}11` }}>
+          {!showRoot && entries.map((entry,i)=>{
+            const isSelected   = selectedIds.has(entry.id) || effectiveSelected?.id === entry.id;
+            const isDropTarget = dragOver === entry.id;
+            return (
+            <div key={entry.id}
+              draggable
+              onDragStart={e => { dragSrc.current = entry.id; e.dataTransfer.effectAllowed = "move"; }}
+              onDragOver={e  => { e.preventDefault(); setDragOver(entry.id); }}
+              onDragLeave={()=> setDragOver(null)}
+              onDrop={e      => { e.preventDefault(); setDragOver(null); if(dragSrc.current) reorder(dragSrc.current, entry.id); dragSrc.current=null; }}
+              onDragEnd={()  => { setDragOver(null); dragSrc.current=null; }}
+              style={{
+                borderBottom:`1px solid ${C.border}11`,
+                borderTop: isDropTarget ? `2px solid ${C.accent}` : "2px solid transparent",
+                background: isSelected ? `${C.orange}18` : "transparent",
+                transition:"background .07s",
+              }}>
               {editingName===entry.id ? (
                 <div style={{ padding:"4px 8px",display:"flex",gap:6 }}>
                   <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value)}
@@ -1255,20 +1410,30 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
                 </div>
               ) : (
                 <div style={{ display:"flex",alignItems:"center",position:"relative" }}
-                  onDoubleClick={e=>startEdit(e,entry)}>
+                  onDoubleClick={e=>{ if(entry.entry_type!=="menu") startEdit(e,entry); }}
+                  onClick={e=>{ selectOne(entry,i,e); onSimCursorChange?.(i); }}>
+                  {/* Drag grip */}
+                  <div style={{ width:14, flexShrink:0, display:"flex", flexDirection:"column",
+                    gap:2, alignItems:"center", paddingLeft:4, cursor:"grab", opacity:.35 }}
+                    onMouseDown={e=>e.stopPropagation()}>
+                    {[0,1].map(r=><div key={r} style={{ display:"flex",gap:1.5 }}>
+                      {[0,1].map(c=><div key={c} style={{ width:2,height:2,borderRadius:1,background:C.mid }}/>)}
+                    </div>)}
+                  </div>
                   <TreeItem entry={entry} index={i} selected={effectiveSelected}
-                    onSelect={(e) => { setSelected(e); onSimCursorChange?.(i); }}
+                    onSelect={(e) => { selectOne(e,i,{metaKey:false,ctrlKey:false,shiftKey:false}); }}
                     onNavigate={navigate} />
-                  {effectiveSelected?.id===entry.id && (
+                  {effectiveSelected?.id===entry.id && selectedIds.size <= 1 && (
                     <div style={{ position:"absolute",right:28,display:"flex",gap:2 }}>
-                      <button onClick={()=>move(entry.id,-1)} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>^</button>
-                      <button onClick={()=>move(entry.id,1)}  style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>v</button>
+                      <button onClick={e=>{e.stopPropagation();move(entry.id,-1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>^</button>
+                      <button onClick={e=>{e.stopPropagation();move(entry.id, 1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>v</button>
                     </div>
                   )}
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           {!showRoot && entries.length===0 && (
             <div style={{ padding:"20px 12px",fontSize:12,color:C.dim,textAlign:"center" }}>
               Empty menu. Add items below.
@@ -1376,11 +1541,11 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
                       +{Math.min(16, limit-count)} Triggers
                     </Btn>
                   )}
-                  {selected && (
+                  {(selected || selectedIds.size > 0) && (
                     <Btn small variant="danger"
                       style={{ marginLeft:"auto" }}
-                      onClick={()=>deleteEntry(selected.id)}>
-                      Remove
+                      onClick={deleteSelected}>
+                      {selectedIds.size > 1 ? `Remove ${selectedIds.size}` : "Remove"}
                     </Btn>
                   )}
                 </div>
@@ -1397,7 +1562,7 @@ function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState,
             Select an item to configure it.
           </div>
         )}
-        {selected?.entry_type==="level" && (
+        {selected?.entry_type==="level" && selected?.id!==config.volMuteScreen.id && (
           <>
             <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:14 }}>
               <span style={{ fontSize:14,fontWeight:600,color:C.text }}>{selected.display_txt}</span>
@@ -1539,7 +1704,7 @@ function SettingsPanel({ config, setConfig }) {
     if (k === "pin")               cmd(`SLP ${v}`);
   };
   return (
-    <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",display:"flex",flexDirection:"column",gap:0,maxWidth:680 }}>
+    <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",display:"flex",flexDirection:"column",gap:0,width:"100%",boxSizing:"border-box" }}>
       <SectionHead>Device</SectionHead>
       <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
         <FieldRow label="Device name" hint="SDN"><input value={config.deviceName} onChange={e=>upd("deviceName",e.target.value)} style={{ maxWidth:220 }} /></FieldRow>
@@ -1626,7 +1791,48 @@ function SettingsPanel({ config, setConfig }) {
         </>)}
         <FieldRow label="Dest IP" hint="SV/SM/TR destination"><input value={config.destIp} onChange={e=>upd("destIp",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} /></FieldRow>
         <FieldRow label="Dest port"><input type="number" value={config.destPort} onChange={e=>upd("destPort",Number(e.target.value))} style={{ maxWidth:100,fontFamily:MONO }} /></FieldRow>
+
+        {/* Host NIC picker */}
+        <FieldRow label="Host NIC" hint="Interface for push/async traffic">
+          <NicPicker value={config.selfIp || ""} onChange={v=>upd("selfIp",v)} />
+        </FieldRow>
       </div>
+    </div>
+  );
+}
+
+function NicPicker({ value, onChange }) {
+  const [nics, setNics] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    setLoading(true);
+    fetch("/api/interfaces")
+      .then(r => r.json())
+      .then(list => { setNics(list); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  return (
+    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{ fontFamily:MONO, fontSize:12, minWidth:180 }}
+      >
+        <option value="">Auto-detect</option>
+        {nics.map(n => (
+          <option key={n.ip} value={n.ip}>{n.name} — {n.ip}</option>
+        ))}
+      </select>
+      {loading && <span style={{ fontSize:10, color:"#666" }}>loading...</span>}
+      <button
+        onClick={() => {
+          setLoading(true);
+          fetch("/api/interfaces").then(r=>r.json()).then(list=>{setNics(list);setLoading(false);}).catch(()=>setLoading(false));
+        }}
+        style={{ fontSize:10, padding:"2px 6px", cursor:"pointer" }}
+      >↻</button>
     </div>
   );
 }
@@ -1637,7 +1843,53 @@ function PushPanel({ config, setConfig }) {
   const [lines,setLines] = useState([]);
   const [running,setRunning] = useState(false);
   const [done,setDone] = useState(false);
+  const [importing,setImporting] = useState(false);
   const ref = useRef(null);
+  const fileRef = useRef(null);
+
+  const handleExport = async () => {
+    try {
+      const res = await fetch(`/api/device/${config.ip}/cfg`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const name = config.deviceName || config.ip || "AxonC1";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${name}.cfg`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch(e) { alert(`Export failed: ${e.message}`); }
+  };
+
+  const handleImport = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await fetch("/api/cfg/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/xml" },
+        body: file,
+      });
+      const j = await res.json();
+      if (j.ok && j.config) {
+        setConfig(prev => ({
+          ...prev,
+          ...j.config,
+          // Preserve ip/mac/firmware from live device
+          ip:              prev.ip,
+          mac:             prev.mac,
+          firmwareVersion: prev.firmwareVersion,
+        }));
+      } else {
+        alert(`Import failed: ${j.error || "Unknown error"}`);
+      }
+    } catch(e) { alert(`Import failed: ${e.message}`); }
+    setImporting(false);
+  };
   const add = msg => { setLines(l=>[...l,msg]); setTimeout(()=>{ if(ref.current) ref.current.scrollTop=ref.current.scrollHeight; },10); };
   const sl  = ms => new Promise(r=>setTimeout(r,ms));
 
@@ -1664,13 +1916,9 @@ function PushPanel({ config, setConfig }) {
     // --- Real push via streaming backend endpoint ---
     try {
       // Find the first destination device to get destIp/destPort
-      const destDev = config.devices?.[0];
       const pushBody = {
-        destIp:  destDev?.ip       ?? "10.0.0.1",
-        destPort: destDev?.port    ?? 49500,
-        selfIp:  window.location.hostname,
-        devName: destDev?.name     ?? "QSC",
-        minDb:   -100, maxDb: 20, step: 2, pollMs: 500,
+        frontendConfig: config,
+        selfIp: config.selfIp || window.location.hostname,
       };
 
       // Register device then stream push progress
@@ -1745,18 +1993,34 @@ function PushPanel({ config, setConfig }) {
   };
 
   return (
-    <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",maxWidth:700 }}>
+    <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",width:"100%",boxSizing:"border-box" }}>
       <SectionHead>Push to Device</SectionHead>
       <p style={{ fontSize:12,color:C.mid,lineHeight:1.7,marginBottom:16 }}>
         Sends the full configuration packet sequence to{" "}
         <span style={{ fontFamily:MONO,color:C.mono }}>{config.ip}:49494</span>.
         The device will restart its menu with the new settings after a successful push.
       </p>
-      <div style={{ display:"flex",gap:10,alignItems:"center",marginBottom:16 }}>
+      <div style={{ display:"flex",gap:10,alignItems:"center",marginBottom:16,flexWrap:"wrap" }}>
         <Btn variant="primary" onClick={run} disabled={running}>
           {running ? "Pushing..." : "Push to device"}
         </Btn>
         {done&&<Tag color="green">Committed</Tag>}
+      </div>
+
+      {/* Config file import / export */}
+      <div style={{ display:"flex",gap:8,marginBottom:20,alignItems:"center" }}>
+        <Btn onClick={handleExport} disabled={!config.ip || config.ip==="192.168.1.xxx"}>
+          Export .cfg
+        </Btn>
+        <Btn onClick={()=>fileRef.current?.click()} disabled={importing}>
+          {importing ? "Importing..." : "Import .cfg"}
+        </Btn>
+        <input
+          ref={fileRef} type="file" accept=".cfg,application/xml,text/xml"
+          style={{ display:"none" }}
+          onChange={e => { const f=e.target.files?.[0]; if(f) handleImport(f); e.target.value=""; }}
+        />
+        <span style={{ fontSize:10,color:C.dim }}>Import restores device settings and menu from a .cfg snapshot file.</span>
       </div>
       {lines.length>0&&(
         <div ref={ref} style={{ background:C.s0,border:`1px solid ${C.border}`,borderRadius:3,
@@ -2069,6 +2333,10 @@ export default function App() {
 
   const [logOpen, setLogOpen] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [consoleH, setConsoleH] = useState(180);
+  const consoleDragging = useRef(false);
+  const consoleDragStartY = useRef(0);
+  const consoleDragStartH = useRef(0);
 
   const addC1 = (ip) => {
     const name = ip ? `AxonC1-manual` : `AxonC1-${Math.floor(Math.random()*0xffffff).toString(16).padStart(6,"0")}`;
@@ -2321,8 +2589,9 @@ export default function App() {
   const breadcrumb = (() => {
     if (tab !== "builder") return null;
     if (navState.view === "root") return null;
-    if (navState.path.length === 0) return [{ label:"Main menu" }];
-    return [{ label:"Main menu" }, ...navState.path.map(s=>({ label:s.label }))];
+    const mmLabel = cfg.mainMenu?.display_txt || "MAIN MENU";
+    if (navState.path.length === 0) return [{ label: mmLabel }];
+    return [{ label: mmLabel }, ...navState.path.map(s=>({ label:s.label }))];
   })();
 
   return (
@@ -2513,46 +2782,78 @@ export default function App() {
           </div>
 
           {/* 3rd-party devices */}
-          <div style={{ display:tab==="devices"?"flex":"none", height:"100%", overflow:"hidden" }}>
+          <div style={{ display:tab==="devices"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
             <DeviceListPanel devices={cfg.devices} setDevices={setDevices} />
           </div>
 
           {/* Settings */}
-          <div style={{ display:tab==="settings"?"block":"none", height:"100%", overflow:"hidden" }}>
+          <div style={{ display:tab==="settings"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
             <SettingsPanel config={cfg} setConfig={setC1Config} />
           </div>
 
           {/* Push */}
-          <div style={{ display:tab==="push"?"block":"none", height:"100%", overflow:"hidden" }}>
+          <div style={{ display:tab==="push"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
             <PushPanel config={cfg} setConfig={setC1Config} />
           </div>
 
         </div>
 
-        {/* Activity log — full width, collapsible drawer */}
-        <div style={{
-          flexShrink:0, borderTop:`1px solid ${C.border}`, background:C.s0,
-          display:"grid",
-          gridTemplateRows: logOpen ? "32px 1fr" : "32px 0fr",
-          transition:"grid-template-rows .18s ease",
-          maxHeight: logOpen ? 202 : 32,
-        }}>
-          <div
-            onClick={()=>setLogOpen(o=>!o)}
-            style={{
-              display:"flex", alignItems:"center", padding:"0 14px", height:32,
-              borderBottom: logOpen ? `1px solid ${C.border}` : "none",
-              cursor:"pointer", userSelect:"none",
+        {/* Console — draggable resizable drawer */}
+        {(() => {
+          const collapsed = consoleH <= 32;
+          const onDragStart = (e) => {
+            e.preventDefault();
+            consoleDragging.current   = true;
+            consoleDragStartY.current = e.clientY;
+            consoleDragStartH.current = consoleH;
+            const onMove = (ev) => {
+              if (!consoleDragging.current) return;
+              const delta = consoleDragStartY.current - ev.clientY;
+              setConsoleH(Math.max(32, Math.min(600, consoleDragStartH.current + delta)));
+            };
+            const onUp = () => {
+              consoleDragging.current = false;
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          };
+          return (
+            <div style={{
+              flexShrink:0, borderTop:`1px solid ${C.border}`, background:C.s0,
+              height: collapsed ? 32 : consoleH,
+              display:"flex", flexDirection:"column",
             }}>
-            <span style={{ fontSize:10, fontWeight:500, color:C.dim, fontFamily:MONO, flex:1 }}>
-              activity.log
-            </span>
-            <span style={{ fontSize:9, color:C.dim }}>{logOpen ? "[-]" : "[+]"}</span>
-          </div>
-          <div style={{ overflow:"hidden", minHeight:0 }}>
-            {logOpen && <LogPanel />}
-          </div>
-        </div>
+              <div
+                onMouseDown={onDragStart}
+                style={{
+                  display:"flex", alignItems:"center", height:32, flexShrink:0,
+                  borderBottom: collapsed ? "none" : `1px solid ${C.border}`,
+                  cursor:"ns-resize", userSelect:"none",
+                }}
+              >
+                <div style={{ padding:"0 10px", display:"flex", flexDirection:"column", gap:2.5, opacity:.3 }}>
+                  {[0,1].map(r=>(
+                    <div key={r} style={{ display:"flex", gap:2.5 }}>
+                      {[0,1,2,3,4].map(i=><div key={i} style={{width:2.5,height:1.5,borderRadius:1,background:C.mid}}/>)}
+                    </div>
+                  ))}
+                </div>
+                <span style={{ fontSize:10, fontWeight:500, color:C.dim, fontFamily:MONO, flex:1 }}>console</span>
+                <span
+                  onClick={e => { e.stopPropagation(); setConsoleH(h => h <= 32 ? 180 : 32); }}
+                  style={{ fontSize:9, color:C.dim, padding:"0 14px", cursor:"pointer", lineHeight:"32px" }}
+                >{collapsed ? "[+]" : "[-]"}</span>
+              </div>
+              {!collapsed && (
+                <div style={{ flex:1, overflow:"hidden", minHeight:0 }}>
+                  <LogPanel />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       </div>
 

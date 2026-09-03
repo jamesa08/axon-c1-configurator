@@ -740,46 +740,87 @@ def _sv_query_bytes(ch: int) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# Blocking push (thread-pool, ported from push_cfg_v3.py)
+# Blocking push -- drives entirely from the frontend config tree
 # ---------------------------------------------------------------------------
 
+def _walk_config_tree(frontend_cfg: dict) -> tuple[list, list, list]:
+    """
+    Walk the frontend config tree and return:
+      level_items: [{display_txt, channel, level_vol, level_mute}]
+      trigger_items: [{display_txt, bytes, dev}]
+      menu_structure: [{name, children: [item_or_submenu]}]  (for MI building)
+    """
+    level_items   = []
+    trigger_items = []
+
+    def walk(node):
+        et = node.get("entry_type", "")
+        if et == "level":
+            level_items.append(node)
+        elif et == "action":
+            trigger_items.append(node)
+        elif et in ("menu", "main_menu"):
+            for child in node.get("entries", []):
+                walk(child)
+
+    vm = frontend_cfg.get("volMuteScreen")
+    if vm:
+        walk(vm)
+    walk(frontend_cfg.get("mainMenu", {}))
+    return level_items, trigger_items
+
+
 def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
-    HOST      = device_ip
-    CORE_IP   = config.get("destIp",   "10.0.0.1")
-    CORE_PORT = int(config.get("destPort", 49500))
-    COMP_IP   = config.get("selfIp",   "0.0.0.0")
-    DEV_NAME  = config.get("devName",  "QSC")
-    MIN_DB    = int(config.get("minDb",  -100))
-    MAX_DB    = int(config.get("maxDb",  20))
-    STEP      = int(config.get("step",   2))
-    POLL_MS   = int(config.get("pollMs", 500))
+    """
+    Push the frontend config to the device.
+    config must contain the full frontend config dict (mainMenu, volMuteScreen,
+    devices, destIp, destPort, etc.)  plus optional overrides.
+    """
+    # ── Pull parameters from the frontend config ───────────────────────────
+    frontend_cfg = config.get("frontendConfig") or config
+
+    # Destination: prefer explicit destIp/destPort, fall back to devices[0]
+    devs      = frontend_cfg.get("devices", [])
+    CORE_IP   = frontend_cfg.get("destIp") or (devs[0]["ip"]   if devs else "10.0.0.1")
+    CORE_PORT = int(frontend_cfg.get("destPort") or (devs[0].get("port", 49500) if devs else 49500))
+    DEV_NAME  = (devs[0]["name"] if devs else "QSC")
+    COMP_IP   = config.get("selfIp", "0.0.0.0")
+
+    HOST = device_ip
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(2)
     sock.bind(("0.0.0.0", 0))
     jid = [1]
 
-    def log_(msg):
+    def log_(msg: str):
         progress_cb(msg)
 
-    def send_raw(cmd):
+    def send_raw(cmd: str) -> str | None:
         sock.sendto(cmd.encode("latin-1"), (HOST, CMD_PORT))
+        log_(f"  >>> SEND RAW {repr(cmd)}")
         try:
             r, _ = sock.recvfrom(65535)
-            return r.decode("latin-1", errors="replace").strip()
+            result = r.decode("latin-1", errors="replace").strip()
+            log_(f"  <<< RECV RAW {repr(result)}")
+            return result
         except socket.timeout:
+            log_(f"  <<< RECV RAW TIMEOUT")
             return None
 
-    def send_json(cmd, payload, fixed_jid=None):
+    def send_json(cmd: str, payload: dict, fixed_jid: int | None = None) -> bool:
         payload["jsonId"] = fixed_jid if fixed_jid is not None else jid[0]
         if fixed_jid is None:
             jid[0] += 1
         payload["version"] = "1.0.0"
         msg = cmd + json.dumps(payload, separators=(",", ":"))
-        sock.sendto(msg.encode("latin-1"), (HOST, CMD_PORT))
+        raw_bytes = msg.encode("latin-1")
+        sock.sendto(raw_bytes, (HOST, CMD_PORT))
+        log_(f"  >>> SEND {cmd} jid={payload['jsonId']} raw={msg}")
         try:
             r, _ = sock.recvfrom(65535)
             rs = r.decode("latin-1", errors="replace").strip()
+            log_(f"  <<< RECV {rs}")
             ok = f"ACK MENU_JSON {payload['jsonId']}" in rs
             label = f"{cmd} id=0x{payload.get('id', payload.get('first', 0)):04x}"
             log_(f"  [{payload['jsonId']:3d}] {label} -> {'OK' if ok else 'FAIL: '+rs[:60]}")
@@ -789,184 +830,332 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
             return False
 
     try:
-        # Phase 1
+        # ── Phase 1: Handshake ────────────────────────────────────────────
+        log_("> QUERY\r")
         log_("=== Phase 1: Handshake")
         r = send_raw("QUERY\r")
         if not r:
             return {"ok": False, "error": "No response to QUERY"}
-        log_(f"  QUERY  -> {r}")
-        log_(f"  SCM    -> {send_raw('SCM THIRD_PARTY\r')}")
+        log_(f"  QUERY -> {r}")
+        log_(f"  SCM   -> {send_raw('SCM THIRD_PARTY\r')}")
         r = send_raw("GND\r")
         n = int(r.split()[-1]) if r else 0
-        log_(f"  GND    -> {r} ({n} devices)")
+        log_(f"  GND   -> {r} ({n} devices)")
         for i in range(n):
-            log_(f"  GDI {i}  -> {(send_raw(f'GDI {i}\r') or 'None')[:80]}")
-        time.sleep(0.05)
+            log_(f"  GDI {i} -> {(send_raw(f'GDI {i}\r') or 'None')[:80]}")
+        import time as _time
+        _time.sleep(0.05)
 
-        # Phase 2
-        log_("=== Phase 2: Menu discovery (GMIID + GMI)")
-        r = send_raw("GMIID\r")
-        log_(f"  GMIID  -> {(r or 'None')[:120]}")
-        if not r or not r.startswith("ACK GMIID"):
-            return {"ok": False, "error": f"GMIID failed: {r}"}
-        parts    = r.split()
-        all_ids  = [int(x, 16) for x in parts[3:]]
-        log_(f"  -> {int(parts[2])} items: {parts[3:]}")
-        time.sleep(0.05)
+        # ── Phase 2: Walk the frontend config tree ────────────────────────
+        log_("=== Phase 2: Building item list from UI config")
+        level_items, trigger_items = _walk_config_tree(frontend_cfg)
+        log_(f"  Levels: {len(level_items)}  Triggers: {len(trigger_items)}")
 
-        def parse_gmi(r):
-            pfx = "ACK GMI "
-            if not r or not r.startswith(pfx):
-                return None
-            rest = r[len(pfx):]
-            sp   = rest.index(" ")
-            iid  = int(rest[:sp], 16)
-            pay  = rest[sp+1:]
-            if len(pay) < 6:
-                return None
-            itype = ord(pay[2]) if isinstance(pay[2], str) else pay[2]
-            return {"id": iid, "type": itype, "name": pay[5:].split("\x00")[0].strip()}
+        if not level_items and not trigger_items:
+            log_("  WARNING: Config has no levels or triggers -- will push empty menu")
 
-        all_items = []
-        for iid in all_ids:
-            hs = f"0x{iid:04X}"
-            parsed = parse_gmi(send_raw(f"GMI {hs}\r"))
-            if parsed:
-                all_items.append(parsed)
-                tn = {0: "MENU", 2: "TRIGGER", 3: "LEVEL"}.get(parsed["type"], f"0x{parsed['type']:02x}")
-                log_(f"  GMI {hs} -> {tn} '{parsed['name']}'")
-            else:
-                log_(f"  GMI {hs} -> FAILED")
-            time.sleep(0.05)
+        # ── Phase 3: Assign device IDs to each item ───────────────────────
+        log_("=== Phase 3: Assigning device IDs")
+        # ID scheme:
+        #   0xFFFE = vol/mute screen
+        #   0xFFF0..0xFFFE = submenu containers (one per col, col = id & 0x0f)
+        #   0xFF{row}{col} = items within submenus
+        # We walk the mainMenu tree to assign IDs preserving the column grouping.
 
-        level_items   = [i for i in all_items if i["type"] == 3]
-        trigger_items = [i for i in all_items if i["type"] == 2]
-        log_(f"  Found: {len(level_items)} level, {len(trigger_items)} trigger")
+        def assign_ids(frontend_cfg: dict, level_items_flat: list, trigger_items_flat: list):
+            vm   = frontend_cfg.get("volMuteScreen")
+            main = frontend_cfg.get("mainMenu", {})
 
-        # Phase 3
-        log_("=== Phase 3: Channel assignment + GLI M reads")
-        root_lvl = sorted([i for i in level_items if i["id"] >= 0xfff0], key=lambda x: x["id"])
-        sub_lvl  = sorted([i for i in level_items if i["id"] <  0xfff0], key=lambda x: x["id"])
-        for idx, item in enumerate(root_lvl + sub_lvl):
-            item["channel"] = idx + 1
-            log_(f"  SV {item['channel']:2d}  0x{item['id']:04x}  '{item['name']}'")
-        for item in level_items:
-            send_raw(f"GLI 0x{item['id']:04x} M\r")
-            time.sleep(0.05)
+            all_items = []
+            if vm:
+                all_items.append({"id": 0xfffe, "name": vm.get("display_txt","Vol/Mute"), "type": 3, "orig": vm})
+            mm_label_ = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
+            all_items.append({"id": 0xffff, "name": mm_label_, "type": 0, "orig": None})
 
-        # Phase 4
+            sv_auto  = [2]
+            next_col = [0]
+            # mi_groups: ordered list of (container_id, [direct child items])
+            # Built during recursion; drives MI emission in Phase 5.
+            mi_groups = []
+
+            def walk(entries, col_ctx):
+                """Walk entries, assign IDs, return list of all_item dicts for this level."""
+                result = []
+                for entry in entries:
+                    et = entry.get("entry_type", "")
+                    if et == "menu":
+                        col = next_col[0]
+                        next_col[0] += 1
+                        container_id = 0xfff0 + col
+                        item = {"id": container_id, "name": entry.get("display_txt","Menu"), "type": 0, "orig": entry}
+                        all_items.append(item)
+                        # Recurse: children of this container get their own col context
+                        children = walk(entry.get("entries", []), col)
+                        mi_groups.append((container_id, children))
+                        result.append(item)
+                    elif et == "level":
+                        col = col_ctx if col_ctx is not None else 0
+                        row = sum(1 for i in all_items if i["id"] < 0xfff0 and (i["id"] & 0x0f) == col)
+                        item_id = (row << 4) | col | 0xff00
+                        lv = entry.get("level_vol", {})
+                        if not lv.get("channel") or lv.get("channel") == 1:
+                            lv["channel"] = sv_auto[0]
+                            entry["level_vol"] = lv
+                        sv_auto[0] = max(sv_auto[0], lv["channel"]) + 1
+                        item = {"id": item_id, "name": entry.get("display_txt",""), "type": 3, "orig": entry}
+                        all_items.append(item)
+                        entry["_push_id"] = item_id
+                        result.append(item)
+                    elif et == "action":
+                        col = col_ctx if col_ctx is not None else 0
+                        row = sum(1 for i in all_items if i["id"] < 0xfff0 and (i["id"] & 0x0f) == col)
+                        item_id = (row << 4) | col | 0xff00
+                        item = {"id": item_id, "name": entry.get("display_txt",""), "type": 2, "orig": entry}
+                        all_items.append(item)
+                        entry["_push_id"] = item_id
+                        result.append(item)
+                return result
+
+            top_level_items = walk(main.get("entries", []), None)
+            return all_items, mi_groups, top_level_items
+
+        all_items, mi_groups, top_level_items = assign_ids(frontend_cfg, level_items, trigger_items)
+
+        # Re-extract with IDs assigned
+        vm_item       = next((i for i in all_items if i["id"] == 0xfffe), None)
+        level_with_id = [i for i in all_items if i["type"] == 3]
+        trig_with_id  = [i for i in all_items if i["type"] == 2]
+
+        for item in level_with_id:
+            sv_ch = item["orig"].get("level_vol", {}).get("channel", 1) if item["orig"] else 1
+            log_(f"  SV {sv_ch:2d}  0x{item['id']:04x}  '{item['name']}'")
+        for idx, item in enumerate(trig_with_id, 1):
+            item["trigger_num"] = idx
+            log_(f"  TR {idx:2d}  0x{item['id']:04x}  '{item['name']}'")
+
+        # ── Phase 4: jsonId budget ────────────────────────────────────────
         log_("=== Phase 4: jsonId budget")
-        submenu_cols = sorted(set((i["id"] & 0x0f) for i in all_items if i["id"] < 0xfff0))
-        n_mi  = 1 + 1 + len(submenu_cols)
-        n_ai  = math.ceil(len(trigger_items) / 4) if trigger_items else 0
-        n_lvl = len(level_items)
+        col_to_container = {}
+        for i in all_items:
+            if i["id"] >= 0xfff0 and i["id"] not in (0xffff, 0xfffe) and i["type"] == 0:
+                col_to_container[i["id"] & 0x0f] = i
+
+        has_vm        = vm_item is not None
+        n_containers  = len(col_to_container)
+        # MI budget: count groups recursively
+        def count_groups(items):
+            if not items: return 0
+            c = 1
+            for item in items:
+                if item["type"] == 0:
+                    for cid, ch in mi_groups:
+                        if cid == item["id"]:
+                            c += count_groups(ch)
+                            break
+            return c
+        n_mi = max(1, 1 + count_groups(top_level_items))
+        n_ai          = math.ceil(len(trig_with_id) / 4) if trig_with_id else 0
+        n_lvl         = len(level_with_id)
         n_ci = n_cq = n_ca = n_lvl * 2
-        total  = 1 + 1 + n_mi + n_ai + n_ci + n_cq + n_ca
-        dl_jid = total
-        mi_start = 2
-        ai_start = mi_start + n_mi
-        ci_start = ai_start + n_ai
-        cq_start = ci_start + n_ci
-        ca_start = cq_start + n_cq
+        total         = 1 + 1 + n_mi + n_ai + n_ci + n_cq + n_ca
+        dl_jid        = total
+        mi_start      = 2
+        ai_start      = mi_start + n_mi
+        ci_start      = ai_start + n_ai
+        cq_start      = ci_start + n_ci
+        ca_start      = cq_start + n_cq
         log_(f"  Total={total}  DL={dl_jid}  MI={n_mi}  AI={n_ai}  CI/CQ/CA={n_ci} each")
 
-        # Phase 5
+        # ── Phase 5: MT / DL / MI / AI ───────────────────────────────────
         log_("=== Phase 5: MT / DL / MI / AI")
         jid[0] = 1
+
+        # MT: all item IDs
         seen, uid_list = set(), []
-        for iid in [i["id"] for i in all_items]:
-            if iid not in seen:
-                seen.add(iid)
-                uid_list.append(iid)
+        for i in all_items:
+            if i["id"] not in seen:
+                seen.add(i["id"])
+                uid_list.append(i["id"])
         send_json("MT", {"ids": uid_list})
 
-        send_json("DL", {"entries": [
-            {"entry": {"async_ip": CORE_IP, "async_port": CORE_PORT,
-                       "ctrl_ip": CORE_IP,  "ctrl_port": CORE_PORT,
-                       "ctrl_proto": "udp",  "name": DEV_NAME, "type": "general"}},
-            {"entry": {"async_ip": COMP_IP, "async_port": CMD_PORT,
-                       "ctrl_ip": COMP_IP,  "ctrl_port": CMD_PORT,
-                       "ctrl_proto": "udp",  "name": "Computer", "type": "general"}},
-        ]}, fixed_jid=dl_jid)
+        # DL: device list
+        dl_entries = []
+        for d in devs:
+            dl_entries.append({"entry": {
+                "async_ip":   d.get("asyncIp", d.get("ip", CORE_IP)),
+                "async_port": int(d.get("asyncPort", d.get("port", CORE_PORT))),
+                "ctrl_ip":    d.get("ip", CORE_IP),
+                "ctrl_port":  int(d.get("port", CORE_PORT)),
+                "ctrl_proto": "udp", "name": d["name"], "type": "general",
+            }})
+        if not dl_entries:
+            dl_entries = [
+                {"entry": {"async_ip": CORE_IP, "async_port": CORE_PORT,
+                           "ctrl_ip":  CORE_IP, "ctrl_port":  CORE_PORT,
+                           "ctrl_proto": "udp", "name": DEV_NAME, "type": "general"}},
+                {"entry": {"async_ip": COMP_IP, "async_port": CMD_PORT,
+                           "ctrl_ip":  COMP_IP, "ctrl_port":  CMD_PORT,
+                           "ctrl_proto": "udp", "name": "Computer", "type": "general"}},
+            ]
+        send_json("DL", {"entries": dl_entries}, fixed_jid=dl_jid)
 
+        # MI packets
         jid[0] = mi_start
-        root_all = sorted([i for i in all_items if i["id"] >= 0xfff0], key=lambda x: x["id"])
-        def etype(i):
+        mm_label = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
+
+        def etype_str(i):
             return "ctrl" if i["type"] == 3 else ("action" if i["type"] == 2 else "menu")
-        rentries = [{"entry": {"id": i["id"], "txt": i["name"], "type": etype(i)}} for i in root_all]
-        rids = [e["entry"]["id"] for e in rentries]
-        send_json("MI", {"entries": rentries, "first": min(rids), "last": max(rids)})
 
-        for col in submenu_cols:
-            citems = sorted([i for i in all_items if (i["id"] & 0x0f) == col and i["id"] < 0xfff0], key=lambda x: x["id"])
-            if not citems:
+        # MI structure from pcap of working unIFY push (frame order matters, jid controls device processing):
+        #
+        # Send order (by frame/time):
+        #   1st sent: MAIN MENU children (jid=miStart+1) -- root levels ctrl first, then containers menu
+        #   2nd..Nth: col packets in REVERSE col order (highest col first)
+        #   LAST sent: [0xFFFE ctrl, 0xFFFF menu] (jid=miStart) -- sent last despite lowest jid
+        #
+        # Device processes by jid so logical order is:
+        #   jid=miStart:   [vol/mute, MAIN MENU]
+        #   jid=miStart+1: MAIN MENU children
+        #   jid=miStart+2..N: col children
+
+        # MI sequencing rule: each type=menu entry in group N spawns group N+1.
+        # We BFS-emit groups: root first, then each menu entry's children in order.
+        #
+        # jid=miStart:   [0xFFFE ctrl, 0xFFFF menu]  -- 0xFFFF spawns jid=miStart+1
+        # jid=miStart+1: top_level_items (MAIN MENU children)
+        # jid=miStart+2..N: children of each menu in BFS order
+
+        g1_entries = []
+        if vm_item:
+            g1_entries.append({"entry": {"id": 0xfffe, "txt": vm_item["name"], "type": "ctrl"}})
+        g1_entries.append({"entry": {"id": 0xffff, "txt": mm_label, "type": "menu"}})
+        g1_ids = [e["entry"]["id"] for e in g1_entries]
+        send_json("MI", {"entries": g1_entries, "first": min(g1_ids), "last": max(g1_ids)},
+                  fixed_jid=mi_start)
+
+        jid[0] = mi_start + 1
+        # BFS queue: each element is a list of items to emit as one MI group
+        bfs_queue = [top_level_items]
+        while bfs_queue:
+            group = bfs_queue.pop(0)
+            if not group:
                 continue
-            entries = [{"entry": {"id": i["id"], "txt": i["name"], "type": etype(i)}} for i in citems]
-            ids = [e["entry"]["id"] for e in entries]
+            entries = [{"entry": {"id": i["id"], "txt": i["name"], "type": etype_str(i)}}
+                       for i in group]
+            ids = [i["id"] for i in group]
             send_json("MI", {"entries": entries, "first": min(ids), "last": max(ids)})
+            # Queue children of each menu item in this group, in order
+            for item in group:
+                if item["type"] == 0:
+                    for container_id, children in mi_groups:
+                        if container_id == item["id"] and children:
+                            bfs_queue.append(children)
+                            break
 
-        send_json("MI", {"entries": [{"entry": {"id": 0xffff, "txt": "MAIN MENU", "type": "menu"}}],
-                         "first": 0xffff, "last": 0xffff})
-
-        trig_ordered = sorted(trigger_items, key=lambda x: x["id"])
-        for idx, t in enumerate(trig_ordered):
-            t["trigger_num"] = idx + 1
+        # AI: trigger actions
         jid[0] = ai_start
-        for bs in range(0, len(trig_ordered), 4):
-            batch = trig_ordered[bs:bs+4]
-            entries = [{"entry": {"action": {"bin": False,
-                "bytes": [ord(c) for c in f"TR {i['trigger_num']}"] + [0x0d],
-                "dev": DEV_NAME, "type": "3rd_party"}, "id": i["id"], "type": "action"}}
-                for i in batch]
-            ids = [e["entry"]["id"] for e in entries]
-            send_json("AI", {"entries": entries, "first": min(ids), "last": max(ids)})
+        for bs in range(0, len(trig_with_id), 4):
+            batch = trig_with_id[bs:bs+4]
+            entries = []
+            for item in batch:
+                orig = item["orig"] or {}
+                raw_bytes = orig.get("bytes") or ([ord(c) for c in f"TR {item['trigger_num']}"] + [0x0d])
+                dev = orig.get("dev", DEV_NAME)
+                entries.append({"entry": {"action": {
+                    "bin": orig.get("binary", False),
+                    "bytes": raw_bytes, "dev": dev, "type": "3rd_party",
+                }, "id": item["id"], "type": "action"}})
+            if entries:
+                ids = [e["entry"]["id"] for e in entries]
+                send_json("AI", {"entries": entries, "first": min(ids), "last": max(ids)})
 
-        # Phase 6
+        # ── Phase 6: CI / CQ / CA ─────────────────────────────────────────
         log_("=== Phase 6: CI / CQ / CA")
-        sub_o  = sorted([i for i in level_items if i["id"] < 0xfff0],  key=lambda x: x["id"], reverse=True)
-        root_o = sorted([i for i in level_items if i["id"] >= 0xfff0], key=lambda x: x["id"], reverse=True)
+        sub_o  = sorted([i for i in level_with_id if i["id"] < 0xfff0],  key=lambda x: x["id"], reverse=True)
+        root_o = sorted([i for i in level_with_id if i["id"] >= 0xfff0], key=lambda x: x["id"], reverse=True)
         ordered = sub_o + root_o
 
         jid[0] = ci_start
         for item in ordered:
-            ch = item["channel"]
+            orig    = item["orig"] or {}
+            vol     = orig.get("level_vol",  {})
+            mute    = orig.get("level_mute", {})
+            sv_ch   = int(vol.get("channel", 1))
+            MIN_DB  = int(vol.get("minParam", -100))
+            MAX_DB  = int(vol.get("maxParam",  20))
+            STEP    = int(vol.get("stepSize",   2))
+            POLL_MS = int(vol.get("pollMs",   500))
+            dev     = vol.get("set_dev_name", DEV_NAME)
+            # Always derive correct byte masks from the SV channel
+            # Use stored bytes if present, otherwise generate from channel number
+            set_bytes  = vol.get("setBytes")  or _sv_set_bytes(sv_ch)
+            qry_bytes  = vol.get("queryBytes") or _sv_query_bytes(sv_ch)
+            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
             send_json("CI", {"ack": False, "ackMask": [], "active": [], "altActive": [], "altInactive": [],
                 "altRespState": False, "async": False, "bin": False, "cmdMask": [],
-                "ctrlType": "mute", "dev": DEV_NAME, "headerTxt": "", "id": item["id"],
+                "ctrlType": "mute", "dev": dev, "headerTxt": "", "id": item["id"],
                 "inactive": [], "lvlPostStr": "", "lvlPreStr": "", "max": 0, "min": 0,
                 "paramDecPt": 0, "query": False, "step": 0, "trim": False, "type": "stateless"})
             send_json("CI", {"ack": False, "ackMask": [], "active": [], "altActive": [], "altInactive": [],
-                "altRespState": False, "async": True, "bin": False, "cmdMask": sv_set_mask(ch),
-                "ctrlType": "vol", "dev": DEV_NAME, "headerTxt": "", "id": item["id"],
-                "inactive": [], "lvlPostStr": "", "lvlPreStr": "", "max": MAX_DB, "min": MIN_DB,
-                "paramDecPt": 0, "query": True, "step": STEP, "trim": False, "type": "explicit"})
+                "altRespState": False, "async": True, "bin": orig.get("binary", False),
+                "cmdMask": set_bytes,
+                "ctrlType": "vol", "dev": dev, "headerTxt": vol.get("headerText", ""),
+                "id": item["id"], "inactive": [], "lvlPostStr": vol.get("lvlPostStr", ""),
+                "lvlPreStr": vol.get("lvlPreStr", ""), "max": MAX_DB, "min": MIN_DB,
+                "paramDecPt": int(vol.get("paramDecPts", 0)), "query": vol.get("queryEnable", True),
+                "step": STEP, "trim": vol.get("trimEnable", False), "type": "explicit"})
 
         jid[0] = cq_start
         for item in ordered:
-            ch = item["channel"]
+            orig    = item["orig"] or {}
+            vol     = orig.get("level_vol",  {})
+            sv_ch   = int(vol.get("channel", 1))
+            dev     = vol.get("set_dev_name", DEV_NAME)
+            POLL_MS = int(vol.get("pollMs", 500))
+            set_bytes  = vol.get("setBytes")  or _sv_set_bytes(sv_ch)
+            qry_bytes  = vol.get("queryBytes") or _sv_query_bytes(sv_ch)
+            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
             send_json("CQ", {"altRespState": False, "bin": False, "cmdMask": [],
-                "ctrlType": "mute", "dev": DEV_NAME, "id": item["id"], "pollMsec": POLL_MS, "respMask": []})
-            send_json("CQ", {"altRespState": False, "bin": False, "cmdMask": sv_query_mask(ch),
-                "ctrlType": "vol", "dev": DEV_NAME, "id": item["id"],
-                "pollMsec": POLL_MS, "respMask": sv_resp_mask(ch)})
+                "ctrlType": "mute", "dev": dev, "id": item["id"],
+                "pollMsec": POLL_MS, "respMask": []})
+            send_json("CQ", {"altRespState": False, "bin": False,
+                "cmdMask":  qry_bytes,
+                "ctrlType": "vol", "dev": dev, "id": item["id"],
+                "pollMsec": POLL_MS,
+                "respMask": resp_bytes})
 
         jid[0] = ca_start
         for item in ordered:
-            ch = item["channel"]
+            orig    = item["orig"] or {}
+            vol     = orig.get("level_vol", {})
+            sv_ch   = int(vol.get("channel", 1))
+            dev     = vol.get("set_dev_name", DEV_NAME)
+            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
             send_json("CA", {"altRespState": False, "bin": False, "ctrlType": "mute",
-                "dev": DEV_NAME, "id": item["id"], "matchSrc": True, "msgMask": []})
+                "dev": dev, "id": item["id"], "matchSrc": True, "msgMask": []})
             send_json("CA", {"altRespState": False, "bin": False, "ctrlType": "vol",
-                "dev": DEV_NAME, "id": item["id"], "matchSrc": True, "msgMask": sv_resp_mask(ch)})
+                "dev": dev, "id": item["id"], "matchSrc": True,
+                "msgMask": resp_bytes})
 
-        # Phase 7
-        log_("=== Phase 7: Batch result + commit")
-        sock.settimeout(5)
+        # ── Phase 7: SF 1 (finalize) + batch result + commit ────────────
+        log_("=== Phase 7: SF finalize + batch result + commit")
+
+        # SF 1: signals device that push sequence is complete
+        # Device will not send batch result until SF is received
+        log_(f"  SF     -> {send_raw('SF 1\r')}")
+
+        # Batch result arrives ~5 seconds after SF
+        sock.settimeout(8)
         batch = None
         try:
             while True:
                 data, _ = sock.recvfrom(65535)
                 t = data.decode("latin-1", errors="replace").strip()
                 if t.startswith("{") and '"json_ids"' in t:
+                    batch = t
+                    break
+                # If batch result arrives as response to something else, catch it
+                if '"result_ids"' in t:
                     batch = t
                     break
         except socket.timeout:
@@ -984,9 +1173,9 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
             log_("  WARNING: No batch result -- proceeding anyway")
 
         sock.settimeout(2)
-        log_(f"  SCM    -> {send_raw('SCM THIRD_PARTY\r')}")
+        log_(f"  SCM   -> {send_raw('SCM THIRD_PARTY\r')}")
         h = uuid.uuid4().hex
-        log_(f"  SMID   -> {send_raw(f'SMID {h}\r')}")
+        log_(f"  SMID  -> {send_raw(f'SMID {h}\r')}")
         log_(f"OK  Committed. Hash: {h}")
         return {"ok": True, "hash": h, "error": None}
 
@@ -995,7 +1184,6 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
         return {"ok": False, "error": str(exc), "hash": None}
     finally:
         sock.close()
-
 
 # ---------------------------------------------------------------------------
 # UDP protocols
@@ -1109,8 +1297,537 @@ async_proto: AsyncProtocol = None
 
 
 # ---------------------------------------------------------------------------
+# .cfg file read / write  (XML + HTML-escaped JSON, file version 1.2)
+# ---------------------------------------------------------------------------
+import xml.etree.ElementTree as ET
+import html
+import re as _re
+
+FILE_VER     = "1.2"
+PRODUCT_NAME = "AxonC1"
+MENU_VER     = "1.2.0"
+
+
+def _bytes_to_sv_channel(byte_list: list[int]) -> int | None:
+    """
+    Decode SV channel from a queryBytes / setBytes list.
+    Format: [83, 86, 32, <digits...>, 32, ...]  = "SV <N> ..."
+    """
+    try:
+        s = bytes(byte_list).decode("latin-1")
+        m = _re.match(r"SV (\d+)", s)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _lc_to_hex(lc_str: str) -> str:
+    """Convert 'R:G:B' or named color or 'OFF' to '#rrggbb' or '#ffffff'."""
+    if not lc_str or lc_str == "OFF":
+        return "#ffffff"
+    named = {"RED": "#ff0000", "GREEN": "#00ff00", "BLUE": "#0000ff",
+             "YELLOW": "#ffff00", "WHITE": "#ffffff", "ORANGE": "#ff8800"}
+    if lc_str.upper() in named:
+        return named[lc_str.upper()]
+    parts = lc_str.split(":")
+    if len(parts) == 3:
+        try:
+            return f"#{int(parts[0]):02x}{int(parts[1]):02x}{int(parts[2]):02x}"
+        except ValueError:
+            pass
+    return "#ffffff"
+
+
+def _hex_to_lc(hex_color: str) -> str:
+    """Convert '#rrggbb' to 'R:G:B' string for the device."""
+    h = hex_color.lstrip("#")
+    if len(h) == 6:
+        return f"{int(h[0:2],16)}:{int(h[2:4],16)}:{int(h[4:6],16)}"
+    return "0:0:0"
+
+
+def cfg_to_frontend(xml_bytes: bytes) -> dict:
+    """
+    Parse a .cfg file and return a frontend-shaped config dict.
+    """
+    root = ET.fromstring(xml_bytes)
+    data = root.find("SNAPSHOT_DATA")
+    if data is None:
+        raise ValueError("Missing SNAPSHOT_DATA element")
+
+    def text(tag, default=""):
+        el = data.find(tag)
+        return el.text.strip() if el is not None and el.text else default
+
+    # ── Device-level settings ─────────────────────────────────────────────
+    lc_raw = text("LC", "OFF")
+    cfg = {
+        "mode":              text("CM", "THIRD_PARTY"),
+        "displayBrightness": int(text("DB", "7")),
+        "displayTimeout":    int(text("DT", "60")),
+        "lbBrightness":      int(text("LBB", "7")),
+        "lbTimeout":         int(text("LBT", "10")),
+        "lbColor":           _lc_to_hex(lc_raw),
+        "lbOn":              lc_raw != "OFF",
+        "pinEnabled":        text("LPM", "0") == "1",
+        "pin":               text("LP", "0000"),
+        "displayLock":       text("DL", "0") == "1",
+    }
+
+    # ── MENU_CONFIG JSON ─────────────────────────────────────────────────
+    mc_el = data.find("MENU_CONFIG")
+    if mc_el is None or not mc_el.text:
+        return cfg
+
+    mc_json = html.unescape(mc_el.text.strip())
+    try:
+        mc = json.loads(mc_json)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"MENU_CONFIG JSON parse error: {e}")
+
+    # ── dev_list -> devices[] ─────────────────────────────────────────────
+    dev_entries = mc.get("dev_list", {}).get("entries", [])
+    devices = []
+    for i, d in enumerate(dev_entries):
+        devices.append({
+            "id":        f"cfg_dev_{i}",
+            "name":      d.get("name", f"Device{i}"),
+            "ip":        d.get("ip", ""),
+            "port":      int(d.get("port", 49500)),
+            "asyncIp":   d.get("async_ip", d.get("ip", "")),
+            "asyncPort": int(d.get("async_port", d.get("port", 49500))),
+            "proto":     "UDP",
+            "type":      "general",
+        })
+    cfg["devices"] = devices
+    if devices:
+        cfg["destIp"]   = devices[0]["ip"]
+        cfg["destPort"] = devices[0]["port"]
+
+    # ── menu.control -> volMuteScreen + mainMenu tree ─────────────────────
+    controls = mc.get("menu", {}).get("control", [])
+
+    # Split: first two entries are vol + mute for the vol/mute screen (0xFFFE),
+    # then the main_menu entry is the tree
+    vol_mute_vol  = None
+    vol_mute_mute = None
+    main_menu_raw = None
+
+    for ctrl in controls:
+        if ctrl.get("entry_type") == "level" and ctrl.get("path", "").count(">") == 1:
+            # Root-level level entry = vol/mute screen
+            if "level_vol" in ctrl:
+                vol_mute_vol  = ctrl
+            elif "level_mute" in ctrl:
+                vol_mute_mute = ctrl
+        elif ctrl.get("entry_type") == "main_menu":
+            main_menu_raw = ctrl
+
+    uid_counter = [0]
+    def uid():
+        uid_counter[0] += 1
+        return f"cfg_{uid_counter[0]:04d}"
+
+    def parse_level(name: str, vol_ctrl: dict | None, mute_ctrl: dict | None) -> dict:
+        vol  = vol_ctrl.get("level_vol",  {}) if vol_ctrl  else {}
+        mute = mute_ctrl.get("level_mute", {}) if mute_ctrl else {}
+        ch = _bytes_to_sv_channel(vol.get("setBytes", [])) or 1
+        return {
+            "id":          uid(),
+            "entry_type":  "level",
+            "display_txt": name,
+            "binary":      False,
+            "level_vol": {
+                "channel":          ch,
+                "setBytes":         vol.get("setBytes", []),
+                "queryBytes":       vol.get("queryBytes", []),
+                "respQueryBytes":   vol.get("respQueryBytes", vol.get("respBytes", [])),
+                "syncBytes":        vol.get("syncBytes", []),
+                "minParam":         vol.get("minParam", -100),
+                "maxParam":         vol.get("maxParam", 20),
+                "stepSize":         vol.get("stepSize", 2),
+                "paramDecPts":      vol.get("paramDecPts", 0),
+                "trimEnable":       vol.get("trimEnable", False),
+                "pollMs":           vol.get("pollMs", 500),
+                "queryEnable":      vol.get("queryEnable", True),
+                "asyncEnable":      vol.get("asyncEnable", True),
+                "ackEnable":        vol.get("ackEnable", False),
+                "headerText":       vol.get("headerText", ""),
+                "lvlPreStr":        vol.get("levelPreStr", ""),
+                "lvlPostStr":       vol.get("levelPostStr", ""),
+                "setter_type":      vol.get("setter_type", 1),
+                "set_dev_name":     vol.get("set_dev_name", devices[0]["name"] if devices else "QSC"),
+                "footerEnable":     vol.get("footerEnable", 1),
+                "active": [], "altActive": [], "altInactive": [], "inactive": [],
+                "asyncAltResponse": False, "queryAltResponse": False, "setAltResponse": False,
+            },
+            "level_mute": {
+                "setBytes":         mute.get("setBytes", []),
+                "queryBytes":       mute.get("queryBytes", []),
+                "respQueryBytes":   mute.get("respQueryBytes", []),
+                "syncBytes":        mute.get("syncBytes", []),
+                "minParam":         mute.get("minParam", 0),
+                "maxParam":         mute.get("maxParam", 0),
+                "stepSize":         mute.get("stepSize", 0),
+                "paramDecPts":      mute.get("paramDecPts", 0),
+                "trimEnable":       mute.get("trimEnable", False),
+                "pollMs":           mute.get("pollMs", 500),
+                "queryEnable":      mute.get("queryEnable", False),
+                "asyncEnable":      mute.get("asyncEnable", False),
+                "ackEnable":        mute.get("ackEnable", False),
+                "headerText":       mute.get("headerText", ""),
+                "lvlPreStr":        mute.get("levelPreStr", ""),
+                "lvlPostStr":       mute.get("levelPostStr", ""),
+                "setter_type":      mute.get("setter_type", 0),
+                "set_dev_name":     mute.get("set_dev_name", devices[0]["name"] if devices else "QSC"),
+                "footerEnable":     mute.get("footerEnable", 0),
+                "active": [], "altActive": [], "altInactive": [], "inactive": [],
+                "asyncAltResponse": False, "queryAltResponse": False, "setAltResponse": False,
+            },
+        }
+
+    def parse_action(raw: dict) -> dict:
+        return {
+            "id":          uid(),
+            "entry_type":  "action",
+            "display_txt": raw.get("display_txt", "Action"),
+            "binary":      raw.get("binary", False),
+            "action_type": raw.get("action_type", "3rd_party"),
+            "bytes":       raw.get("bytes", []),
+            "dev":         raw.get("dev", devices[0]["name"] if devices else "QSC"),
+            "cr":          True, "lf": False,
+        }
+
+    def parse_menu_entries(raw_entries: list) -> list:
+        """Recursively parse menu entries from .cfg control list."""
+        out = []
+        i = 0
+        while i < len(raw_entries):
+            entry = raw_entries[i]
+            etype = entry.get("entry_type", "")
+            if etype == "menu":
+                children = parse_menu_entries(entry.get("entries", []))
+                out.append({
+                    "id":          uid(),
+                    "entry_type":  "menu",
+                    "display_txt": entry.get("display_txt", "Menu"),
+                    "entries":     children,
+                })
+                i += 1
+            elif etype == "level":
+                # Levels come in pairs (vol + mute) with the same display_txt
+                next_entry = raw_entries[i+1] if i+1 < len(raw_entries) else None
+                vol_e  = entry      if "level_vol"  in entry      else None
+                mute_e = next_entry if next_entry and "level_mute" in next_entry else None
+                if mute_e is None:
+                    vol_e = None
+                    mute_e = entry if "level_mute" in entry else None
+                name = entry.get("display_txt", "Level")
+                out.append(parse_level(name, vol_e, mute_e))
+                i += 2 if mute_e else 1
+            elif etype == "action":
+                out.append(parse_action(entry))
+                i += 1
+            else:
+                i += 1
+        return out
+
+    # Vol/mute screen
+    vol_mute_entry = None
+    if vol_mute_vol or vol_mute_mute:
+        name = (vol_mute_vol or vol_mute_mute).get("display_txt", "Vol/Mute Screen")
+        vol_mute_entry = parse_level(name, vol_mute_vol, vol_mute_mute)
+        vol_mute_entry["_isRoot"] = True
+
+    # Main menu tree
+    main_menu = {"id": uid(), "entry_type": "menu", "display_txt": "MAIN MENU", "entries": []}
+    if main_menu_raw:
+        main_menu["entries"] = parse_menu_entries(main_menu_raw.get("entries", []))
+
+    cfg["volMuteScreen"] = vol_mute_entry
+    cfg["mainMenu"]      = main_menu
+    cfg["volMuteEnabled"] = vol_mute_entry is not None
+    cfg["menuEnabled"]    = bool(main_menu["entries"])
+
+    return cfg
+
+
+def frontend_to_cfg(cfg: dict, firmware_ver: str = "V1.5.0") -> bytes:
+    """
+    Serialize a frontend config dict to .cfg XML bytes.
+    """
+    # ── Build MENU_CONFIG JSON ─────────────────────────────────────────────
+    devs = cfg.get("devices", [])
+    dev_entries = []
+    for d in devs:
+        dev_entries.append({
+            "async_ip":   d.get("asyncIp", d.get("ip", "")),
+            "async_port": str(d.get("asyncPort", d.get("port", 49500))),
+            "ip":         d.get("ip", ""),
+            "name":       d.get("name", "QSC"),
+            "port":       str(d.get("port", 49500)),
+            "proto":      1,
+            "type":       0,
+        })
+
+    dev_name = devs[0]["name"] if devs else "QSC"
+
+    def level_to_ctrl(entry: dict, path_prefix: str) -> list[dict]:
+        """Return a [vol_ctrl, mute_ctrl] pair for a level entry."""
+        name = entry.get("display_txt", "Level")
+        path = path_prefix + ">" + name
+        vol  = entry.get("level_vol",  {})
+        mute = entry.get("level_mute", {})
+        vol_ctrl = {
+            "binary":      entry.get("binary", False),
+            "display_txt": name,
+            "entry_type":  "level",
+            "hasDefVol":   True,
+            "level_vol": {
+                "ackEnable":       vol.get("ackEnable", False),
+                "active":          vol.get("active", []),
+                "altActive":       vol.get("altActive", []),
+                "altInactive":     vol.get("altInactive", []),
+                "asyncAltResponse": vol.get("asyncAltResponse", False),
+                "asyncEnable":     vol.get("asyncEnable", True),
+                "footerEnable":    vol.get("footerEnable", 1),
+                "headerText":      vol.get("headerText", ""),
+                "inactive":        vol.get("inactive", []),
+                "levelPostStr":    vol.get("lvlPostStr", ""),
+                "levelPreStr":     vol.get("lvlPreStr", ""),
+                "maxParam":        vol.get("maxParam", 20),
+                "minParam":        vol.get("minParam", -100),
+                "paramDecPts":     vol.get("paramDecPts", 0),
+                "pollMs":          vol.get("pollMs", 500),
+                "queryAltResponse": vol.get("queryAltResponse", False),
+                "queryBytes":      vol.get("queryBytes", []),
+                "queryEnable":     vol.get("queryEnable", True),
+                "respBytes":       [],
+                "respQueryBytes":  vol.get("respQueryBytes", []),
+                "setAltResponse":  vol.get("setAltResponse", False),
+                "setBytes":        vol.get("setBytes", []),
+                "set_dev_name":    vol.get("set_dev_name", dev_name),
+                "setter_type":     vol.get("setter_type", 1),
+                "stepSize":        vol.get("stepSize", 2),
+                "syncBytes":       vol.get("syncBytes", []),
+                "trimEnable":      vol.get("trimEnable", False),
+            },
+            "path": path,
+        }
+        mute_ctrl = {
+            "binary":      entry.get("binary", False),
+            "display_txt": name,
+            "entry_type":  "level",
+            "hasDefVol":   True,
+            "level_mute": {
+                "ackEnable":       mute.get("ackEnable", False),
+                "active":          mute.get("active", []),
+                "altActive":       mute.get("altActive", []),
+                "altInactive":     mute.get("altInactive", []),
+                "asyncAltResponse": mute.get("asyncAltResponse", False),
+                "asyncEnable":     mute.get("asyncEnable", False),
+                "footerEnable":    mute.get("footerEnable", 0),
+                "headerText":      mute.get("headerText", ""),
+                "inactive":        mute.get("inactive", []),
+                "levelPostStr":    mute.get("lvlPostStr", ""),
+                "levelPreStr":     mute.get("lvlPreStr", ""),
+                "maxParam":        mute.get("maxParam", 0),
+                "minParam":        mute.get("minParam", 0),
+                "paramDecPts":     mute.get("paramDecPts", 0),
+                "pollMs":          mute.get("pollMs", 500),
+                "queryAltResponse": mute.get("queryAltResponse", False),
+                "queryBytes":      mute.get("queryBytes", []),
+                "queryEnable":     mute.get("queryEnable", False),
+                "respBytes":       [],
+                "respQueryBytes":  mute.get("respQueryBytes", []),
+                "setAltResponse":  mute.get("setAltResponse", False),
+                "setBytes":        mute.get("setBytes", []),
+                "set_dev_name":    mute.get("set_dev_name", dev_name),
+                "setter_type":     mute.get("setter_type", 0),
+                "stepSize":        mute.get("stepSize", 0),
+                "syncBytes":       mute.get("syncBytes", []),
+                "trimEnable":      mute.get("trimEnable", False),
+            },
+            "path": path,
+        }
+        return [vol_ctrl, mute_ctrl]
+
+    def menu_entry_to_ctrl(entry: dict, path_prefix: str) -> list[dict]:
+        etype = entry.get("entry_type", "")
+        name  = entry.get("display_txt", "")
+        path  = path_prefix + ">" + name
+        if etype == "level":
+            return level_to_ctrl(entry, path_prefix)
+        elif etype == "action":
+            return [{
+                "action_type": entry.get("action_type", "3rd_party"),
+                "binary":      entry.get("binary", False),
+                "bytes":       entry.get("bytes", []),
+                "dev":         entry.get("dev", dev_name),
+                "display_txt": name,
+                "entry_type":  "action",
+                "path":        path,
+            }]
+        elif etype == "menu":
+            return []  # menus appear inline in the tree, not in flat control list
+        return []
+
+    def build_menu_tree(entry: dict, path_prefix: str) -> dict:
+        name  = entry.get("display_txt", "")
+        path  = path_prefix + ">" + name
+        etype = entry.get("entry_type", "")
+        if etype == "menu":
+            children_raw = entry.get("entries", [])
+            children = [build_menu_tree(c, path) for c in children_raw]
+            # Filter out None
+            children = [c for c in children if c]
+            return {"display_txt": name, "entries": children, "entry_type": "menu", "path": path}
+        elif etype == "level":
+            # In the tree, levels don't carry vol/mute detail (that's in the control list)
+            # but the .cfg format DOES embed them in the entries array
+            vol  = entry.get("level_vol",  {})
+            mute = entry.get("level_mute", {})
+            result_entries = []
+            for ctrl_pair in [{"level_vol": vol}, {"level_mute": mute}]:
+                key = "level_vol" if "level_vol" in ctrl_pair else "level_mute"
+                d = {
+                    "binary": False, "display_txt": name,
+                    "entry_type": "level", key: ctrl_pair[key],
+                    "path": path,
+                }
+                if key == "level_vol":
+                    d["hasDefVol"] = True
+                result_entries.append(d)
+            return result_entries  # returns a list, caller must flatten
+        elif etype == "action":
+            return {
+                "action_type": entry.get("action_type", "3rd_party"),
+                "binary":      entry.get("binary", False),
+                "bytes":       entry.get("bytes", []),
+                "dev":         entry.get("dev", dev_name),
+                "display_txt": name, "entry_type": "action", "path": path,
+            }
+        return None
+
+    def flatten_menu_children(entries: list, path_prefix: str) -> list:
+        result = []
+        for entry in entries:
+            built = build_menu_tree(entry, path_prefix)
+            if isinstance(built, list):
+                result.extend(built)
+            elif built:
+                result.append(built)
+        return result
+
+    def build_submenu_tree(menu_entry: dict, path_prefix: str) -> dict:
+        name     = menu_entry.get("display_txt", "")
+        path     = path_prefix + ">" + name
+        children = []
+        for child in menu_entry.get("entries", []):
+            built = build_menu_tree(child, path)
+            if isinstance(built, list):
+                children.extend(built)
+            elif built:
+                children.append(built)
+        return {"display_txt": name, "entries": children, "entry_type": "menu", "path": path}
+
+    # Build flat control list
+    controls = []
+
+    # Vol/mute screen (root level entries)
+    vm = cfg.get("volMuteScreen")
+    if vm:
+        vm_path = ""
+        controls.extend(level_to_ctrl(vm, vm_path))
+
+    # Main menu tree
+    main_menu = cfg.get("mainMenu", {})
+    main_path = ""
+    main_menu_entries = []
+    for child in main_menu.get("entries", []):
+        built = build_submenu_tree(child, ">MAIN MENU")
+        main_menu_entries.append(built)
+
+    controls.append({
+        "display_txt": "MAIN MENU",
+        "entries":     main_menu_entries,
+        "entry_type":  "main_menu",
+        "hasMainMenu": True,
+        "path":        ">MAIN MENU",
+    })
+
+    mc = {
+        "dev_list": {"entries": dev_entries},
+        "menu":     {"control": controls, "version": MENU_VER},
+        "qsc_mode": 1,
+    }
+
+    mc_json = json.dumps(mc, indent=4)
+    mc_escaped = html.escape(mc_json)
+
+    # ── Build XML ─────────────────────────────────────────────────────────
+    lc_str = _hex_to_lc(cfg.get("lbColor", "#ffffff")) if cfg.get("lbOn", True) else "OFF"
+
+    xml_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<SNAPSHOT_FILE>',
+        '    <SNAPSHOT_INFO>',
+        f'        <FILE_VER>{FILE_VER}</FILE_VER>',
+        '        <PRODUCT_ID>NA</PRODUCT_ID>',
+        f'        <PRODUCT_NAME>{PRODUCT_NAME}</PRODUCT_NAME>',
+        f'        <PRODUCT_MCU_VER>{firmware_ver}</PRODUCT_MCU_VER>',
+        '    </SNAPSHOT_INFO>',
+        '    <SNAPSHOT_DATA>',
+        f'        <CM>{cfg.get("mode","THIRD_PARTY")}</CM>',
+        f'        <DB>{cfg.get("displayBrightness", 7)}</DB>',
+        f'        <DL>{"1" if cfg.get("displayLock") else "0"}</DL>',
+        f'        <DT>{cfg.get("displayTimeout", 60)}</DT>',
+        '        <GDR>false</GDR>',
+        f'        <LBB>{cfg.get("lbBrightness", 5)}</LBB>',
+        f'        <LBT>{cfg.get("lbTimeout", 10)}</LBT>',
+        f'        <LC>{lc_str}</LC>',
+        f'        <LP>{cfg.get("pin","0000")}</LP>',
+        f'        <LPM>{"1" if cfg.get("pinEnabled") else "0"}</LPM>',
+        f'        <MENU_CONFIG>{mc_escaped}</MENU_CONFIG>',
+        '    </SNAPSHOT_DATA>',
+        '</SNAPSHOT_FILE>',
+    ]
+    return "\n".join(xml_lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
 # HTTP handlers
 # ---------------------------------------------------------------------------
+
+async def api_interfaces(req: web.Request) -> web.Response:
+    """GET /api/interfaces -- list available network interfaces with IPv4 addresses."""
+    import subprocess, platform
+    interfaces = []
+
+    try:
+        import netifaces
+        for iface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+            for a in addrs:
+                ip = a.get("addr", "")
+                if ip and not ip.startswith("127."):
+                    interfaces.append({"name": iface, "ip": ip})
+    except ImportError:
+        # Fallback: use socket to find default outbound IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("10.255.255.255", 1))
+            ip = s.getsockname()[0]
+            s.close()
+            interfaces.append({"name": "default", "ip": ip})
+        except Exception:
+            interfaces.append({"name": "default", "ip": "0.0.0.0"})
+
+    if not interfaces:
+        interfaces.append({"name": "default", "ip": "0.0.0.0"})
+
+    return web.json_response(interfaces)
+
 
 async def api_device_add(req: web.Request) -> web.Response:
     body = await req.json()
@@ -1228,6 +1945,56 @@ async def api_push(req: web.Request) -> web.Response:
     return response
 
 
+async def api_cfg_export(req: web.Request) -> web.Response:
+    """GET /api/device/{ip}/cfg  -- download current config as .cfg file."""
+    ip  = req.match_info["ip"]
+    dev = devices.get(ip, {})
+    # Merge device registry info into a minimal config if no full cfg is stored
+    cfg = dev.get("frontend_config", {
+        "mode":              dev.get("mode", "THIRD_PARTY"),
+        "displayBrightness": int(dev.get("displayBright", 7)),
+        "displayTimeout":    10,
+        "lbBrightness":      int(dev.get("lbBright", 5)),
+        "lbTimeout":         10,
+        "lbColor":           "#ffffff",
+        "lbOn":              True,
+        "pinEnabled":        False,
+        "pin":               "0000",
+        "displayLock":       False,
+        "devices":           [],
+        "mainMenu":          {"entry_type": "menu", "display_txt": "MAIN MENU", "entries": []},
+        "volMuteScreen":     None,
+    })
+    body = await req.json() if req.content_length else {}
+    # Allow caller to pass full frontend config in body
+    if body.get("config"):
+        cfg = body["config"]
+        devices.setdefault(ip, {})["frontend_config"] = cfg
+    fw  = dev.get("firmware", "V1.5.0")
+    if not fw.startswith("V"):
+        fw = f"V{fw}"
+    try:
+        xml_bytes = frontend_to_cfg(cfg, firmware_ver=fw)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    name = cfg.get("deviceName") or dev.get("name") or f"AxonC1-{ip.replace('.','_')}"
+    return web.Response(
+        body=xml_bytes,
+        content_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{name}.cfg"'},
+    )
+
+
+async def api_cfg_import(req: web.Request) -> web.Response:
+    """POST /api/cfg/import  -- upload a .cfg file, returns frontend config."""
+    try:
+        data = await req.read()
+        cfg  = cfg_to_frontend(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"ok": True, "config": cfg})
+
+
 async def ws_handler(req: web.Request) -> web.WebSocketResponse:
     ip = req.match_info["ip"]
     ws = web.WebSocketResponse()
@@ -1278,6 +2045,7 @@ async def ws_discovery_handler(req: web.Request) -> web.WebSocketResponse:
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get ("/api/devices",              api_list_devices)
+    app.router.add_get ("/api/interfaces",             api_interfaces)
     app.router.add_post("/api/device",               api_device_add)
     app.router.add_post("/api/scan",                 api_scan)
     app.router.add_get ("/api/device/{ip}/discover", api_discover)
@@ -1285,6 +2053,9 @@ def create_app() -> web.Application:
     app.router.add_post("/api/device/{ip}/cmd",      api_send_command)
     app.router.add_post("/api/device/{ip}/sv",       api_set_sv)
     app.router.add_post("/api/device/{ip}/push",     api_push)
+    app.router.add_get ("/api/device/{ip}/cfg",       api_cfg_export)
+    app.router.add_post("/api/device/{ip}/cfg",       api_cfg_export)
+    app.router.add_post("/api/cfg/import",            api_cfg_import)
     app.router.add_get ("/ws/_discovery",            ws_discovery_handler)
     app.router.add_get ("/ws/{ip}",                  ws_handler)
     if STATIC_DIR.exists():
