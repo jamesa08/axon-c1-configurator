@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // --- TOKENS (Warp x ClickHouse remix) -----------------------------------------
 // Warp's depth system + ClickHouse's density philosophy + sienna brand accent
@@ -1801,7 +1801,7 @@ function SettingsPanel({ config, setConfig }) {
   );
 }
 
-function NicPicker({ value, onChange }) {
+function NicPicker({ value, onChange, compact = false }) {
   const [nics, setNics] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
 
@@ -1818,14 +1818,14 @@ function NicPicker({ value, onChange }) {
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        style={{ fontFamily:MONO, fontSize:12, minWidth:180 }}
+        style={{ fontFamily:MONO, fontSize:11, minWidth: compact ? 0 : 180, flex: compact ? 1 : undefined }}
       >
         <option value="">Auto-detect</option>
         {nics.map(n => (
           <option key={n.ip} value={n.ip}>{n.name} — {n.ip}</option>
         ))}
       </select>
-      {loading && <span style={{ fontSize:10, color:"#666" }}>loading...</span>}
+      {loading && <span style={{ fontSize:10, color:C.dim }}>loading...</span>}
       <button
         onClick={() => {
           setLoading(true);
@@ -2333,6 +2333,7 @@ export default function App() {
 
   const [logOpen, setLogOpen] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [scanNic, setScanNic] = useState("");
   const [consoleH, setConsoleH] = useState(180);
   const consoleDragging = useRef(false);
   const consoleDragStartY = useRef(0);
@@ -2352,9 +2353,13 @@ export default function App() {
 
   const doScan = async () => {
     setScanning(true);
-    addLog("INFO", "Scanning network for Axon C1 devices...");
+    addLog("INFO", `Scanning network for Axon C1 devices${scanNic ? ` via ${scanNic}` : ""}...`);
     try {
-      const r = await fetch("/api/scan", { method:"POST" });
+      const r = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nic: scanNic || null }),
+      });
       const j = await r.json();
       addLog("INFO", `Scan complete. Found ${j.total} device(s): ${(j.found||[]).join(", ") || "none"}`);
     } catch(e) {
@@ -2610,6 +2615,10 @@ export default function App() {
             </div>
             <div style={{ flex:1, display:"flex", flexDirection:"column", padding:"16px 14px", gap:10 }}>
               <div style={{ fontSize:11, color:C.dim, marginBottom:4 }}>No devices found yet.</div>
+              <div>
+                <div style={{ fontSize:10, color:C.dim, marginBottom:4 }}>Host NIC</div>
+                <NicPicker value={scanNic} onChange={setScanNic} compact />
+              </div>
               <button onClick={doScan} disabled={scanning} style={{
                 height:28, borderRadius:4, border:`1px solid ${C.borderHi}`,
                 background:C.s1, color:scanning?C.accent:C.mid, fontFamily:SANS, fontSize:12,
@@ -2691,9 +2700,13 @@ export default function App() {
           </div>
 
           {c1List.length === 0 && !scanning && (
-            <div style={{ padding:"8px 14px", fontSize:11, color:C.dim, lineHeight:1.5 }}>
+            <div style={{ padding:"8px 14px", fontSize:11, color:C.dim, lineHeight:1.8 }}>
               No devices found yet.<br/>
               <span style={{ color:C.dim }}>Scan will run automatically on start.</span>
+              <div style={{ marginTop:6 }}>
+                <div style={{ fontSize:10, color:C.dim, marginBottom:3 }}>Host NIC</div>
+                <NicPicker value={scanNic} onChange={setScanNic} compact />
+              </div>
             </div>
           )}
 

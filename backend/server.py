@@ -762,6 +762,9 @@ def _walk_config_tree(frontend_cfg: dict) -> tuple[list, list, list]:
         elif et in ("menu", "main_menu"):
             for child in node.get("entries", []):
                 walk(child)
+        # sync_action and init_macro are root-level special entries; they are
+        # stored on frontend_cfg["_rootControls"] and handled in assign_ids,
+        # so we intentionally skip them here to avoid double-counting.
 
     vm = frontend_cfg.get("volMuteScreen")
     if vm:
@@ -869,57 +872,92 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
             all_items = []
             if vm:
                 all_items.append({"id": 0xfffe, "name": vm.get("display_txt","Vol/Mute"), "type": 3, "orig": vm})
+
+            # Reserved IDs for root-level special entries (pcap-confirmed):
+            #   0xFFFE = vol/mute screen control
+            #   0xFFFD = sync_action
+            #   0xFFFB = init_macro
+            #   0xFFFF = main_menu container
+            # These are always emitted in the root MI group regardless of menu depth.
+            sync_item  = None
+            macro_item = None
+            for ctrl in frontend_cfg.get("_rootControls", []):
+                et = ctrl.get("entry_type", "")
+                if et == "sync_action":
+                    sync_item = {"id": 0xfffd, "name": ctrl.get("display_txt","Sync Action"),
+                                 "type": 4, "orig": ctrl}
+                    all_items.append(sync_item)
+                elif et == "init_macro":
+                    macro_item = {"id": 0xfffb, "name": ctrl.get("display_txt","Init Macro"),
+                                  "type": 5, "orig": ctrl}
+                    all_items.append(macro_item)
+
             mm_label_ = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
-            all_items.append({"id": 0xffff, "name": mm_label_, "type": 0, "orig": None})
+            mm_item = {"id": 0xffff, "name": mm_label_, "type": 0, "orig": None}
+            all_items.append(mm_item)
 
             sv_auto  = [2]
-            next_col = [0]
             # mi_groups: ordered list of (container_id, [direct child items])
             # Built during recursion; drives MI emission in Phase 5.
             mi_groups = []
 
-            def walk(entries, col_ctx):
+            # ID scheme confirmed by pcap (CAP2_ALL_KINDS_OF_STUFF.pcapng):
+            #   Menu nodes use a depth-based nibble-shift pattern:
+            #     depth 1 (children of main_menu): 0xFFF0, 0xFFF1, ...
+            #     depth 2: 0xFF00, 0xFF10, ...
+            #     depth 3: 0xF000, 0xF100, ...
+            #   Leaf items (ctrl/action) within the deepest menu get sequential
+            #   IDs in 0x1000 increments: 0x0000, 0x1000, 0x2000, ...
+            # The old scheme (row<<4 | col | 0xff00) was incorrect.
+            next_leaf_id = [0x0000]
+            next_menu_id_at_depth = {}  # depth -> next available menu ID
+
+            def _next_menu_id(depth: int) -> int:
+                shift = (3 - depth) * 4   # depth 1->8bits, 2->4bits, 3->0bits
+                base  = 0xfff0 >> ((depth - 1) * 4)
+                if depth not in next_menu_id_at_depth:
+                    next_menu_id_at_depth[depth] = base
+                cid = next_menu_id_at_depth[depth]
+                next_menu_id_at_depth[depth] = cid - (1 << shift)
+                return cid
+
+            def walk(entries, depth):
                 """Walk entries, assign IDs, return list of all_item dicts for this level."""
                 result = []
                 for entry in entries:
                     et = entry.get("entry_type", "")
                     if et == "menu":
-                        col = next_col[0]
-                        next_col[0] += 1
-                        container_id = 0xfff0 + col
+                        container_id = _next_menu_id(depth)
                         item = {"id": container_id, "name": entry.get("display_txt","Menu"), "type": 0, "orig": entry}
                         all_items.append(item)
-                        # Recurse: children of this container get their own col context
-                        children = walk(entry.get("entries", []), col)
+                        children = walk(entry.get("entries", []), depth + 1)
                         mi_groups.append((container_id, children))
                         result.append(item)
                     elif et == "level":
-                        col = col_ctx if col_ctx is not None else 0
-                        row = sum(1 for i in all_items if i["id"] < 0xfff0 and (i["id"] & 0x0f) == col)
-                        item_id = (row << 4) | col | 0xff00
                         lv = entry.get("level_vol", {})
                         if not lv.get("channel") or lv.get("channel") == 1:
                             lv["channel"] = sv_auto[0]
                             entry["level_vol"] = lv
                         sv_auto[0] = max(sv_auto[0], lv["channel"]) + 1
+                        item_id = next_leaf_id[0]
+                        next_leaf_id[0] += 0x1000
                         item = {"id": item_id, "name": entry.get("display_txt",""), "type": 3, "orig": entry}
                         all_items.append(item)
                         entry["_push_id"] = item_id
                         result.append(item)
                     elif et == "action":
-                        col = col_ctx if col_ctx is not None else 0
-                        row = sum(1 for i in all_items if i["id"] < 0xfff0 and (i["id"] & 0x0f) == col)
-                        item_id = (row << 4) | col | 0xff00
+                        item_id = next_leaf_id[0]
+                        next_leaf_id[0] += 0x1000
                         item = {"id": item_id, "name": entry.get("display_txt",""), "type": 2, "orig": entry}
                         all_items.append(item)
                         entry["_push_id"] = item_id
                         result.append(item)
                 return result
 
-            top_level_items = walk(main.get("entries", []), None)
-            return all_items, mi_groups, top_level_items
+            top_level_items = walk(main.get("entries", []), 1)
+            return all_items, mi_groups, top_level_items, sync_item, macro_item
 
-        all_items, mi_groups, top_level_items = assign_ids(frontend_cfg, level_items, trigger_items)
+        all_items, mi_groups, top_level_items, sync_item, macro_item = assign_ids(frontend_cfg, level_items, trigger_items)
 
         # Re-extract with IDs assigned
         vm_item       = next((i for i in all_items if i["id"] == 0xfffe), None)
@@ -1003,48 +1041,74 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
         jid[0] = mi_start
         mm_label = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
 
-        def etype_str(i):
-            return "ctrl" if i["type"] == 3 else ("action" if i["type"] == 2 else "menu")
+        def mi_entry_for(i: dict) -> dict:
+            """Build the inner 'entry' dict for an MI packet item.
 
-        # MI structure from pcap of working unIFY push (frame order matters, jid controls device processing):
-        #
-        # Send order (by frame/time):
-        #   1st sent: MAIN MENU children (jid=miStart+1) -- root levels ctrl first, then containers menu
-        #   2nd..Nth: col packets in REVERSE col order (highest col first)
-        #   LAST sent: [0xFFFE ctrl, 0xFFFF menu] (jid=miStart) -- sent last despite lowest jid
-        #
-        # Device processes by jid so logical order is:
-        #   jid=miStart:   [vol/mute, MAIN MENU]
-        #   jid=miStart+1: MAIN MENU children
-        #   jid=miStart+2..N: col children
+            Pcap-confirmed type strings and extra fields per type:
+              type 0 (menu):   "menu" -- main_menu also gets initMacro fields
+              type 2 (action): "action"
+              type 3 (ctrl):   "ctrl"
+              type 4 (sync):   "sync"
+              type 5 (macro):  "macro" + initMacro/initMacroDelay/interCmdDelay
+            """
+            t = i["type"]
+            if t == 3:
+                return {"id": i["id"], "txt": i["name"], "type": "ctrl"}
+            if t == 2:
+                return {"id": i["id"], "txt": i["name"], "type": "action"}
+            if t == 4:
+                return {"id": i["id"], "txt": i["name"], "type": "sync"}
+            if t == 5:
+                orig = i.get("orig") or {}
+                return {
+                    "id": i["id"], "txt": i["name"], "type": "macro",
+                    "initMacro":      True,
+                    "initMacroDelay": int(orig.get("initMacroDelay", 3)),
+                    "interCmdDelay":  int(orig.get("interCmdDelay", 100)),
+                }
+            # type 0: menu. The main_menu node (0xFFFF) also carries initMacro fields
+            # per the pcap (frame 11: "initMacro":true on the CustomTitle entry).
+            orig = i.get("orig") or {}
+            if i["id"] == 0xffff:
+                return {
+                    "id": i["id"], "txt": i["name"], "type": "menu",
+                    "initMacro":      True,
+                    "initMacroDelay": int(orig.get("initMacroDelay", 3)),
+                    "interCmdDelay":  int(orig.get("interCmdDelay", 100)),
+                }
+            return {"id": i["id"], "txt": i["name"], "type": "menu"}
 
-        # MI sequencing rule: each type=menu entry in group N spawns group N+1.
-        # We BFS-emit groups: root first, then each menu entry's children in order.
-        #
-        # jid=miStart:   [0xFFFE ctrl, 0xFFFF menu]  -- 0xFFFF spawns jid=miStart+1
-        # jid=miStart+1: top_level_items (MAIN MENU children)
-        # jid=miStart+2..N: children of each menu in BFS order
-
-        g1_entries = []
+        # Root MI group (jid=miStart): all reserved root-level entries in order:
+        #   0xFFFE ctrl, 0xFFFD sync, 0xFFFB macro, 0xFFFF menu
+        # This matches the pcap frame 11 entry order exactly.
+        g1_items = []
         if vm_item:
-            g1_entries.append({"entry": {"id": 0xfffe, "txt": vm_item["name"], "type": "ctrl"}})
-        g1_entries.append({"entry": {"id": 0xffff, "txt": mm_label, "type": "menu"}})
-        g1_ids = [e["entry"]["id"] for e in g1_entries]
+            g1_items.append(vm_item)
+        if sync_item:
+            g1_items.append(sync_item)
+        if macro_item:
+            g1_items.append(macro_item)
+        # Always include the main_menu entry; look it up in all_items.
+        mm_item_ref = next((i for i in all_items if i["id"] == 0xffff), None)
+        if mm_item_ref:
+            g1_items.append(mm_item_ref)
+
+        g1_entries = [{"entry": mi_entry_for(i)} for i in g1_items]
+        g1_ids = [i["id"] for i in g1_items]
         send_json("MI", {"entries": g1_entries, "first": min(g1_ids), "last": max(g1_ids)},
                   fixed_jid=mi_start)
 
         jid[0] = mi_start + 1
-        # BFS queue: each element is a list of items to emit as one MI group
+        # BFS queue: each element is a list of items to emit as one MI group.
+        # Each menu entry's children form the next group in BFS order.
         bfs_queue = [top_level_items]
         while bfs_queue:
             group = bfs_queue.pop(0)
             if not group:
                 continue
-            entries = [{"entry": {"id": i["id"], "txt": i["name"], "type": etype_str(i)}}
-                       for i in group]
+            entries = [{"entry": mi_entry_for(i)} for i in group]
             ids = [i["id"] for i in group]
             send_json("MI", {"entries": entries, "first": min(ids), "last": max(ids)})
-            # Queue children of each menu item in this group, in order
             for item in group:
                 if item["type"] == 0:
                     for container_id, children in mi_groups:
@@ -1052,7 +1116,7 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
                             bfs_queue.append(children)
                             break
 
-        # AI: trigger actions
+        # AI: trigger actions (3rd_party action entries)
         jid[0] = ai_start
         for bs in range(0, len(trig_with_id), 4):
             batch = trig_with_id[bs:bs+4]
@@ -1069,8 +1133,40 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
                 ids = [e["entry"]["id"] for e in entries]
                 send_json("AI", {"entries": entries, "first": min(ids), "last": max(ids)})
 
+        # AI: init_macro sub-actions (m_action entries, pcap frames 15-16).
+        # Each macro sub-action is sent as a separate AI packet with type "m_action".
+        # The macro item id is 0xFFFB; each entry has an idx and name.
+        if macro_item:
+            orig_macro = macro_item.get("orig") or {}
+            macro_entries_raw = orig_macro.get("entries", [])
+            m_action_entries = []
+            for idx, sub in enumerate(macro_entries_raw):
+                sub_bytes = sub.get("bytes", [])
+                sub_dev   = sub.get("dev", DEV_NAME)
+                m_action_entries.append({"entry": {
+                    "id": 0xfffb,
+                    "m_action": {
+                        "action": {
+                            "bin":   sub.get("binary", False),
+                            "bytes": sub_bytes,
+                            "dev":   sub_dev,
+                            "type":  "3rd_party",
+                        },
+                        "idx":  idx,
+                        "name": sub.get("display_txt", f"MACRO {idx}"),
+                    },
+                    "type": "m_action",
+                }})
+            if m_action_entries:
+                send_json("AI", {"entries": m_action_entries,
+                                 "first": 0xfffb, "last": 0xfffb})
+
         # ── Phase 6: CI / CQ / CA ─────────────────────────────────────────
         log_("=== Phase 6: CI / CQ / CA")
+        # Ordering per pcap: leaf (sub-menu) ctrl items sorted descending by id,
+        # then root-level ctrl items (>=0xfff0) sorted descending by id.
+        # The sync control (0xFFFD) goes into this same ordered list as its own
+        # special entry (ctrlType "sync") with no vol/mute pairing.
         sub_o  = sorted([i for i in level_with_id if i["id"] < 0xfff0],  key=lambda x: x["id"], reverse=True)
         root_o = sorted([i for i in level_with_id if i["id"] >= 0xfff0], key=lambda x: x["id"], reverse=True)
         ordered = sub_o + root_o
@@ -1136,6 +1232,28 @@ def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
             send_json("CA", {"altRespState": False, "bin": False, "ctrlType": "vol",
                 "dev": dev, "id": item["id"], "matchSrc": True,
                 "msgMask": resp_bytes})
+
+        # Sync control (0xFFFD) gets its own CI/CQ/CA triplet with ctrlType "sync".
+        # The pcap shows the cmdMask carries the STARTUP SYNC query bytes.
+        if sync_item:
+            sync_orig   = sync_item.get("orig") or {}
+            init_sync   = sync_orig.get("init_sync", {})
+            sync_qbytes = init_sync.get("queryBytes", [])
+            send_json("CI", {
+                "active": [], "altActive": [], "altInactive": [],
+                "altRespState": False, "async": False, "bin": False,
+                "ctrlType": "sync", "dev": "", "id": 0xfffd,
+                "inactive": [], "query": False, "type": "stateless",
+            })
+            send_json("CQ", {
+                "bin": False, "cmdMask": sync_qbytes,
+                "ctrlType": "sync", "dev": "", "id": 0xfffd,
+                "pollMsec": 500, "respMask": [],
+            })
+            send_json("CA", {
+                "bin": False, "ctrlType": "sync", "dev": "", "id": 0xfffd,
+                "matchSrc": True, "msgMask": [],
+            })
 
         # ── Phase 7: SF 1 (finalize) + batch result + commit ────────────
         log_("=== Phase 7: SF finalize + batch result + commit")
@@ -1413,15 +1531,34 @@ def cfg_to_frontend(xml_bytes: bytes) -> dict:
     vol_mute_mute = None
     main_menu_raw = None
 
+    root_controls = []  # sync_action and init_macro entries preserved for assign_ids
     for ctrl in controls:
-        if ctrl.get("entry_type") == "level" and ctrl.get("path", "").count(">") == 1:
+        et = ctrl.get("entry_type", "")
+        if et == "level" and ctrl.get("path", "").count(">") == 1:
             # Root-level level entry = vol/mute screen
             if "level_vol" in ctrl:
                 vol_mute_vol  = ctrl
             elif "level_mute" in ctrl:
                 vol_mute_mute = ctrl
-        elif ctrl.get("entry_type") == "main_menu":
+        elif et == "main_menu":
             main_menu_raw = ctrl
+        elif et == "sync_action":
+            root_controls.append({
+                "entry_type":    "sync_action",
+                "display_txt":   ctrl.get("display_txt", "Sync Action"),
+                "path":          ctrl.get("path", ""),
+                # Carry the init_sync sub-object for the CQ cmdMask (STARTUP SYNC bytes)
+                "init_sync":     ctrl.get("init_sync", {}),
+            })
+        elif et == "init_macro":
+            root_controls.append({
+                "entry_type":      "init_macro",
+                "display_txt":     ctrl.get("display_txt", "Init Macro"),
+                "path":            ctrl.get("path", ""),
+                "initMacroDelay":  ctrl.get("initMacroDelay", 3),
+                "interCmdDelay":   ctrl.get("interCmdDelay", 100),
+                "entries":         ctrl.get("entries", []),
+            })
 
     uid_counter = [0]
     def uid():
@@ -1544,10 +1681,11 @@ def cfg_to_frontend(xml_bytes: bytes) -> dict:
     if main_menu_raw:
         main_menu["entries"] = parse_menu_entries(main_menu_raw.get("entries", []))
 
-    cfg["volMuteScreen"] = vol_mute_entry
-    cfg["mainMenu"]      = main_menu
+    cfg["volMuteScreen"]  = vol_mute_entry
+    cfg["mainMenu"]       = main_menu
     cfg["volMuteEnabled"] = vol_mute_entry is not None
     cfg["menuEnabled"]    = bool(main_menu["entries"])
+    cfg["_rootControls"]  = root_controls   # sync_action + init_macro for assign_ids
 
     return cfg
 
