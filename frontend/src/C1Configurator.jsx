@@ -1843,6 +1843,7 @@ function PushPanel({ config, setConfig }) {
   const [lines,setLines] = useState([]);
   const [running,setRunning] = useState(false);
   const [done,setDone] = useState(false);
+  const [pushOk,setPushOk] = useState(null); // null=not run, true=success, false=failed
   const [importing,setImporting] = useState(false);
   const ref = useRef(null);
   const fileRef = useRef(null);
@@ -1906,7 +1907,7 @@ function PushPanel({ config, setConfig }) {
   };
 
   const run = async () => {
-    setLines([]); setRunning(true); setDone(false);
+    setLines([]); setRunning(true); setDone(false); setPushOk(null);
     const { lv, tr, mu } = countAll(config.mainMenu);
     const totalLv = lv + 1;
     const total   = 1+1+3+Math.ceil(tr/4)+totalLv*6;
@@ -1958,9 +1959,12 @@ function PushPanel({ config, setConfig }) {
         add(`OK  Config committed. Hash: ${finalResult.hash}`);
         setConfig(c=>({...c, configHash: finalResult.hash}));
         addLog("ACK", `Push complete. SMID=${finalResult.hash?.slice(0,12)}...`);
+        setPushOk(true);
       } else {
-        add(`ERROR: ${finalResult?.error ?? "Unknown error"}`);
-        addLog("ERR", `Push failed: ${finalResult?.error ?? "Unknown"}`);
+        const errMsg = finalResult?.error ?? "Unknown error";
+        add(`ERROR: ${errMsg}`);
+        addLog("ERR", `Push failed: ${errMsg}`);
+        setPushOk(false);
       }
 
     } catch(err) {
@@ -1987,6 +1991,7 @@ function PushPanel({ config, setConfig }) {
       add(`OK  Config committed (sim). Hash: ${hash}`);
       setConfig(c=>({...c,configHash:hash}));
       addLog("ACK",`Push complete (sim). SMID=${hash.slice(0,12)}...`);
+      setPushOk(true);
     }
 
     setRunning(false); setDone(true);
@@ -2004,7 +2009,8 @@ function PushPanel({ config, setConfig }) {
         <Btn variant="primary" onClick={run} disabled={running}>
           {running ? "Pushing..." : "Push to device"}
         </Btn>
-        {done&&<Tag color="green">Committed</Tag>}
+        {done && pushOk === true  && <Tag color="green">Committed</Tag>}
+        {done && pushOk === false && <Tag color="danger">Push failed</Tag>}
       </div>
 
       {/* Config file import / export */}
@@ -2026,9 +2032,17 @@ function PushPanel({ config, setConfig }) {
         <div ref={ref} style={{ background:C.s0,border:`1px solid ${C.border}`,borderRadius:3,
           padding:"8px 10px",fontFamily:MONO,fontSize:11,lineHeight:1.85,
           height:280,overflowY:"auto",color:C.mono }}>
-          {lines.map((l,i)=>(
-            <div key={i} style={{ color:l.startsWith("OK")?C.green:l.startsWith("---")?C.mid:l.startsWith(">")?C.orange:C.mono }}>{l}</div>
-          ))}
+          {lines.map((l,i)=>{
+            let color = C.mono;
+            if (l.startsWith("OK"))                                    color = C.green;
+            else if (l.startsWith("ERROR") || l.includes("FAIL") ||
+                     l.includes("DEVICE REPORTED") || l.includes("result="))
+                                                                        color = C.danger;
+            else if (l.startsWith("WARNING") || l.includes("WARN"))   color = C.warn;
+            else if (l.startsWith("---") || l.startsWith("==="))      color = C.mid;
+            else if (l.startsWith(">"))                                color = C.orange;
+            return <div key={i} style={{ color }}>{l}</div>;
+          })}
         </div>
       )}
     </div>
@@ -2451,18 +2465,10 @@ export default function App() {
     return () => { dead = true; ws?.close(); };
   }, []);
 
-  // ── Explicit sync when a device is selected that hasn't loaded its config yet ──
-  useEffect(() => {
-    if (!selectedC1) return;
-    const unit = c1List.find(u => u.id === selectedC1);
-    if (!unit?.ip || unit.ip === "192.168.1.xxx") return;
-    // Already synced if the menu tree contains device-sourced entries (id starts with "dev_")
-    const hasDev = (node) => node?.id?.startsWith("dev_") ||
-      (node?.entries || []).some(hasDev);
-    if (hasDev(unit.config?.mainMenu) || hasDev(unit.config?.volMuteScreen)) return;
-
-    addLog("INFO", `Loading config from ${unit.ip}...`);
-    const ip = unit.ip;
+  // ── Sync a device by IP and apply result to c1List ───────────────────────
+  const syncDevice = useCallback((ip) => {
+    if (!ip || ip === "192.168.1.xxx") return;
+    addLog("INFO", `Loading config from ${ip}...`);
     fetch(`/api/device/${ip}/sync`, { method: "POST" })
       .then(async res => {
         const reader = res.body.getReader();
@@ -2499,6 +2505,14 @@ export default function App() {
         }
       })
       .catch(e => addLog("ERR", `Sync request failed: ${e.message}`));
+  }, []);
+
+  // Auto-sync on first selection of a real device
+  useEffect(() => {
+    if (!selectedC1) return;
+    const unit = c1List.find(u => u.id === selectedC1);
+    if (!unit?.ip || unit.ip === "192.168.1.xxx") return;
+    syncDevice(unit.ip);
   }, [selectedC1]);
   // Sim panel -- extracted so it stays mounted regardless of tab
   const simPanel = (
@@ -2715,7 +2729,7 @@ export default function App() {
               key={unit.id}
               unit={unit}
               active={selectedC1 === unit.id}
-              onClick={() => setSelectedC1(unit.id)}
+              onClick={() => { setSelectedC1(unit.id); syncDevice(unit.ip); }}
             />
           ))}
 

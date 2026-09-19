@@ -63,17 +63,18 @@ def parse_query_response(resp: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# cmdMask helpers (match push_cfg_v3.py byte-for-byte)
+# Byte-mask builders for SV (QSC volume/mute) control protocol.
+# "SV N \xe3\r"  = set channel N to value (the \xe3 byte separates the value)
+# "SV N \r"      = query channel N current value
+# These are stored on frontend level_vol entries as setBytes/queryBytes/
+# respQueryBytes and are passed through unchanged into CI/CQ/CA cmdMask fields.
 # ---------------------------------------------------------------------------
 
-def sv_set_mask(ch: int) -> list[int]:
+def _sv_set_bytes(ch: int) -> list[int]:
     return [ord(c) for c in f"SV {ch} "] + [0xe3, 0x0d]
 
-def sv_query_mask(ch: int) -> list[int]:
+def _sv_query_bytes(ch: int) -> list[int]:
     return [ord(c) for c in f"SV {ch} "] + [0x0d]
-
-def sv_resp_mask(ch: int) -> list[int]:
-    return [ord(c) for c in f"SV {ch} "] + [0xe3, 0x0d]
 
 
 # ---------------------------------------------------------------------------
@@ -732,569 +733,691 @@ def _blocking_sync(device_ip: str, progress_cb) -> dict:
         sock.close()
 
 
-def _sv_set_bytes(ch: int) -> list[int]:
-    return [ord(c) for c in f"SV {ch} "] + [0xe3, 0x0d]
-
-def _sv_query_bytes(ch: int) -> list[int]:
-    return [ord(c) for c in f"SV {ch} "] + [0x0d]
-
-
 # ---------------------------------------------------------------------------
-# Blocking push -- drives entirely from the frontend config tree
+# Blocking push -- drives entirely from the frontend config tree.
+# Logic ported from push.py (the ground-truth reference implementation).
 # ---------------------------------------------------------------------------
 
-def _walk_config_tree(frontend_cfg: dict) -> tuple[list, list, list]:
-    """
-    Walk the frontend config tree and return:
-      level_items: [{display_txt, channel, level_vol, level_mute}]
-      trigger_items: [{display_txt, bytes, dev}]
-      menu_structure: [{name, children: [item_or_submenu]}]  (for MI building)
-    """
-    level_items   = []
-    trigger_items = []
+# System IDs (confirmed from pcap)
+_ID_TOP_MENU   = 0xFFFF   # main menu container
+_ID_ROOT_CTRL  = 0xFFFE   # root vol/mute screen
+_ID_SYNC       = 0xFFFD   # startup sync action
+_ID_INIT_MACRO = 0xFFFB   # init macro
 
-    def walk(node):
-        et = node.get("entry_type", "")
-        if et == "level":
-            level_items.append(node)
-        elif et == "action":
-            trigger_items.append(node)
-        elif et in ("menu", "main_menu"):
-            for child in node.get("entries", []):
-                walk(child)
-        # sync_action and init_macro are root-level special entries; they are
-        # stored on frontend_cfg["_rootControls"] and handled in assign_ids,
-        # so we intentionally skip them here to avoid double-counting.
+VERSION = "1.0.0"
 
-    vm = frontend_cfg.get("volMuteScreen")
-    if vm:
-        walk(vm)
-    walk(frontend_cfg.get("mainMenu", {}))
-    return level_items, trigger_items
+
+def _child_id(parent_id: int, position: int, depth: int) -> int:
+    """
+    Nibble-inheritance ID formula (confirmed from pcap).
+    depth is the depth of the CHILD being computed (1-indexed, child of root=1).
+      depth 1: 0xFFF0 | pos
+      depth 2: 0xFF00 | (pos << 4) | (parent & 0x00F)
+      depth 3: 0xF000 | (pos << 8) | (parent & 0x0FF)
+      depth 4: 0x0000 | (pos << 12)| (parent & 0xFFF)
+    """
+    if depth == 1:
+        return 0xFFF0 | position
+    elif depth == 2:
+        return 0xFF00 | (position << 4) | (parent_id & 0x00F)
+    elif depth == 3:
+        return 0xF000 | (position << 8) | (parent_id & 0x0FF)
+    elif depth == 4:
+        return 0x0000 | (position << 12) | (parent_id & 0xFFF)
+    else:
+        raise ValueError(f"Unsupported depth {depth}")
+
+
+def _walk_menu(submenus: list, parent_id: int = _ID_TOP_MENU, depth: int = 1):
+    """
+    Recursively walk the menu tree.
+    Yields (node_id, parent_id, depth, position, node) for every node.
+    """
+    for pos, node in enumerate(submenus):
+        nid = _child_id(parent_id, pos, depth)
+        yield nid, parent_id, depth, pos, node
+        if node.get("entry_type") == "menu":
+            yield from _walk_menu(node.get("entries", []), nid, depth + 1)
+
+
+def _build_id_list(frontend_cfg: dict, include_vol_mute: bool,
+                   include_menu: bool, include_sync: bool,
+                   include_macro: bool) -> list[int]:
+    """
+    Build the MT ids array in column-major walk order (confirmed from pcap).
+    System IDs first, then tree walk depth-first.
+    """
+    ids = []
+    if include_sync:
+        ids.append(_ID_SYNC)
+    if include_macro:
+        ids.append(_ID_INIT_MACRO)
+    if include_vol_mute:
+        ids.append(_ID_ROOT_CTRL)
+    if include_menu:
+        ids.append(_ID_TOP_MENU)
+        submenus = frontend_cfg.get("mainMenu", {}).get("entries", [])
+        for nid, _pid, _depth, _pos, _node in _walk_menu(submenus):
+            ids.append(nid)
+    return ids
+
+
+def _count_total_packets(frontend_cfg: dict, ctrl_ids: list,
+                         include_menu: bool, include_sync: bool,
+                         include_macro: bool) -> int:
+    """
+    Pre-compute total JSON packet count so DL's jsonId can be assigned up front.
+    Mirrors push.py count_total_packets().
+    """
+    submenus = frontend_cfg.get("mainMenu", {}).get("entries", [])
+
+    n_mi = 1  # root system MI block always present
+    n_ai = 1 if include_macro else 0
+
+    if include_menu:
+        parent_groups: set = set()
+        for _nid, parent_id, _depth, _pos, _node in _walk_menu(submenus):
+            parent_groups.add(parent_id)
+        n_mi += len(parent_groups)
+
+        action_parents: set = set()
+        for _nid, parent_id, _depth, _pos, node in _walk_menu(submenus):
+            if node.get("entry_type") == "action":
+                action_parents.add(parent_id)
+        n_ai += len(action_parents)
+
+    n_ctrl     = len(ctrl_ids)
+    n_sync_pkt = 3 if include_sync else 0
+
+    return (
+        1            # MT
+        + n_mi
+        + n_ai
+        + n_ctrl * 2  # CI vol+mute
+        + n_ctrl * 2  # CQ vol+mute
+        + n_ctrl * 2  # CA vol+mute
+        + n_sync_pkt
+        + 1           # DL
+    )
 
 
 def _blocking_push(device_ip: str, config: dict, progress_cb) -> dict:
     """
     Push the frontend config to the device.
-    config must contain the full frontend config dict (mainMenu, volMuteScreen,
-    devices, destIp, destPort, etc.)  plus optional overrides.
+    Packet sequence and ordering match push.py (the ground-truth script)
+    which was verified against hardware pcap captures.
     """
-    # ── Pull parameters from the frontend config ───────────────────────────
     frontend_cfg = config.get("frontendConfig") or config
 
-    # Destination: prefer explicit destIp/destPort, fall back to devices[0]
-    devs      = frontend_cfg.get("devices", [])
-    CORE_IP   = frontend_cfg.get("destIp") or (devs[0]["ip"]   if devs else "10.0.0.1")
-    CORE_PORT = int(frontend_cfg.get("destPort") or (devs[0].get("port", 49500) if devs else 49500))
-    DEV_NAME  = (devs[0]["name"] if devs else "QSC")
-    COMP_IP   = config.get("selfIp", "0.0.0.0")
+    devs     = frontend_cfg.get("devices", [])
+    HOST     = device_ip
 
-    HOST = device_ip
+    # Feature flags driven by frontend toggles (mirrors push.py INCLUDE_* flags)
+    include_vol_mute = bool(frontend_cfg.get("volMuteEnabled", True))
+    include_menu     = bool(frontend_cfg.get("menuEnabled", True))
+    # Sync and macro live under _rootControls in the frontend config
+    sync_ctrl  = next((c for c in frontend_cfg.get("_rootControls", [])
+                       if c.get("entry_type") == "sync_action"), None)
+    macro_ctrl = next((c for c in frontend_cfg.get("_rootControls", [])
+                       if c.get("entry_type") == "init_macro"), None)
+    include_sync  = sync_ctrl  is not None
+    include_macro = macro_ctrl is not None
 
+    submenus = frontend_cfg.get("mainMenu", {}).get("entries", [])
+
+    # ── Socket setup ──────────────────────────────────────────────────────
+    TIMEOUT = 0.05   # 50ms per push.py; device ACKs within 1-3ms on LAN
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
+    sock.settimeout(TIMEOUT)
     sock.bind(("0.0.0.0", 0))
-    jid = [1]
+
+    seq = [0]   # mutable counter for jsonId sequencing
 
     def log_(msg: str):
         progress_cb(msg)
 
-    def send_raw(cmd: str) -> str | None:
-        sock.sendto(cmd.encode("latin-1"), (HOST, CMD_PORT))
-        log_(f"  >>> SEND RAW {repr(cmd)}")
-        try:
-            r, _ = sock.recvfrom(65535)
-            result = r.decode("latin-1", errors="replace").strip()
-            log_(f"  <<< RECV RAW {repr(result)}")
-            return result
-        except socket.timeout:
-            log_(f"  <<< RECV RAW TIMEOUT")
-            return None
+    def _next_jid() -> int:
+        seq[0] += 1
+        return seq[0]
 
-    def send_json(cmd: str, payload: dict, fixed_jid: int | None = None) -> bool:
-        payload["jsonId"] = fixed_jid if fixed_jid is not None else jid[0]
-        if fixed_jid is None:
-            jid[0] += 1
-        payload["version"] = "1.0.0"
-        msg = cmd + json.dumps(payload, separators=(",", ":"))
-        raw_bytes = msg.encode("latin-1")
-        sock.sendto(raw_bytes, (HOST, CMD_PORT))
-        log_(f"  >>> SEND {cmd} jid={payload['jsonId']} raw={msg}")
-        try:
-            r, _ = sock.recvfrom(65535)
-            rs = r.decode("latin-1", errors="replace").strip()
-            log_(f"  <<< RECV {rs}")
-            ok = f"ACK MENU_JSON {payload['jsonId']}" in rs
-            label = f"{cmd} id=0x{payload.get('id', payload.get('first', 0)):04x}"
-            log_(f"  [{payload['jsonId']:3d}] {label} -> {'OK' if ok else 'FAIL: '+rs[:60]}")
-            return ok
-        except socket.timeout:
-            log_(f"  [{payload['jsonId']:3d}] {cmd} -> TIMEOUT")
-            return False
+    def send_raw(cmd: str) -> str | None:
+        """Send a plain ASCII command and collect responses until 50ms silence."""
+        data = (cmd + "\r").encode()
+        sock.sendto(data, (HOST, CMD_PORT))
+        responses = []
+        while True:
+            try:
+                pkt, _ = sock.recvfrom(65535)
+                responses.append(pkt.decode("utf-8", errors="replace").rstrip("\r\n"))
+            except socket.timeout:
+                break
+        result = responses[0] if responses else None
+        ack = result and f"ACK {cmd.split()[0]}" in result
+        log_(f"  {'OK  ' if ack else 'FAIL'}  {cmd}  ->  {result or 'TIMEOUT'}")
+        return result
+
+    def send_json_pkt(prefix: str, payload: dict, jid: int, desc: str = "") -> bool:
+        """
+        Send one JSON packet (prefix + compact JSON + \\r) and ACK-gate:
+        wait until the device echoes 'ACK MENU_JSON <jid>' or 2s elapses.
+        jsonId and version are appended last (push.py style: caller builds
+        the content fields, we inject the envelope fields here).
+        """
+        payload["jsonId"]  = jid
+        payload["version"] = VERSION
+        msg = (prefix + json.dumps(payload, separators=(",", ":")) + "\r").encode()
+        sock.sendto(msg, (HOST, CMD_PORT))
+
+        # ACK-gated receive: keep reading until we see the expected ACK
+        ack_str = f"ACK MENU_JSON {jid}"
+        deadline = time.monotonic() + 2.0
+        responses = []
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            sock.settimeout(min(remaining, TIMEOUT))
+            try:
+                pkt, _ = sock.recvfrom(65535)
+                r = pkt.decode("utf-8", errors="replace").rstrip("\r\n")
+                responses.append(r)
+                if ack_str in r:
+                    break
+            except socket.timeout:
+                break
+        sock.settimeout(TIMEOUT)
+
+        ack = any(ack_str in r for r in responses)
+        label = (prefix + json.dumps(payload, separators=(",", ":")))[:72]
+        log_(f"  [{jid:>3}] {'OK  ' if ack else 'FAIL'}  {label}")
+        return ack
 
     try:
-        # ── Phase 1: Handshake ────────────────────────────────────────────
-        log_("> QUERY\r")
-        log_("=== Phase 1: Handshake")
-        r = send_raw("QUERY\r")
-        if not r:
-            return {"ok": False, "error": "No response to QUERY"}
-        log_(f"  QUERY -> {r}")
-        log_(f"  SCM   -> {send_raw('SCM THIRD_PARTY\r')}")
-        r = send_raw("GND\r")
-        n = int(r.split()[-1]) if r else 0
-        log_(f"  GND   -> {r} ({n} devices)")
-        for i in range(n):
-            log_(f"  GDI {i} -> {(send_raw(f'GDI {i}\r') or 'None')[:80]}")
-        import time as _time
-        _time.sleep(0.05)
+        # ══════════════════════════════════════════════════════════════════
+        # PRE-PUSH SETTINGS BLOCK  (plain ASCII, before MT)
+        # Matches the unIFY-observed send order exactly.
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== Pre-push device settings")
 
-        # ── Phase 2: Walk the frontend config tree ────────────────────────
-        log_("=== Phase 2: Building item list from UI config")
-        level_items, trigger_items = _walk_config_tree(frontend_cfg)
-        log_(f"  Levels: {len(level_items)}  Triggers: {len(trigger_items)}")
+        r = send_raw("QUERY")
+        if not r or "ACK QUERY" not in r:
+            return {"ok": False, "error": "No response to QUERY -- device offline?"}
 
-        if not level_items and not trigger_items:
-            log_("  WARNING: Config has no levels or triggers -- will push empty menu")
+        cm  = frontend_cfg.get("mode", "THIRD_PARTY")
+        db  = int(frontend_cfg.get("displayBrightness", 5))
+        dt  = int(frontend_cfg.get("displayTimeout", 60))
+        sdr = int(frontend_cfg.get("displayRotation", 0))
+        lbb = int(frontend_cfg.get("lbBrightness", 5))
+        lbt = int(frontend_cfg.get("lbTimeout", 60))
+        lpm = 1 if frontend_cfg.get("pinEnabled") else 0
+        lp  = str(frontend_cfg.get("pin", "0000")).zfill(4)
+        sdn = (frontend_cfg.get("deviceName") or "").strip()
 
-        # ── Phase 3: Assign device IDs to each item ───────────────────────
-        log_("=== Phase 3: Assigning device IDs")
-        # ID scheme:
-        #   0xFFFE = vol/mute screen
-        #   0xFFF0..0xFFFE = submenu containers (one per col, col = id & 0x0f)
-        #   0xFF{row}{col} = items within submenus
-        # We walk the mainMenu tree to assign IDs preserving the column grouping.
+        # SCM sent twice (observed in unIFY pcap)
+        send_raw(f"SCM {cm}")
+        send_raw(f"SCM {cm}")
+        send_raw(f"SDB {db}")
+        send_raw("SDL 0")       # display level value enable; always 0 (unconfirmed setter)
+        send_raw(f"SDT {dt}")
+        send_raw(f"SDR {sdr}")
+        send_raw(f"SLBB {lbb}")
+        send_raw(f"SLBT {lbt}")
+        # SLP must only be sent when SLPM=1; sending it while lock is off
+        # causes the device to delay or drop the subsequent SLPM 0 ACK.
+        if lpm:
+            send_raw(f"SLP {lp}")
+        send_raw(f"SLPM {lpm}")
+        if sdn:
+            send_raw(f"SDN {sdn}")
 
-        def assign_ids(frontend_cfg: dict, level_items_flat: list, trigger_items_flat: list):
-            vm   = frontend_cfg.get("volMuteScreen")
-            main = frontend_cfg.get("mainMenu", {})
+        # ══════════════════════════════════════════════════════════════════
+        # BUILD ID LISTS AND PRE-COMPUTE PACKET COUNT
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== Building menu IDs")
 
-            all_items = []
-            if vm:
-                all_items.append({"id": 0xfffe, "name": vm.get("display_txt","Vol/Mute"), "type": 3, "orig": vm})
+        all_ids = _build_id_list(frontend_cfg, include_vol_mute, include_menu,
+                                 include_sync, include_macro)
 
-            # Reserved IDs for root-level special entries (pcap-confirmed):
-            #   0xFFFE = vol/mute screen control
-            #   0xFFFD = sync_action
-            #   0xFFFB = init_macro
-            #   0xFFFF = main_menu container
-            # These are always emitted in the root MI group regardless of menu depth.
-            sync_item  = None
-            macro_item = None
-            for ctrl in frontend_cfg.get("_rootControls", []):
-                et = ctrl.get("entry_type", "")
-                if et == "sync_action":
-                    sync_item = {"id": 0xfffd, "name": ctrl.get("display_txt","Sync Action"),
-                                 "type": 4, "orig": ctrl}
-                    all_items.append(sync_item)
-                elif et == "init_macro":
-                    macro_item = {"id": 0xfffb, "name": ctrl.get("display_txt","Init Macro"),
-                                  "type": 5, "orig": ctrl}
-                    all_items.append(macro_item)
+        # Collect ctrl IDs: child ctrl items descending, 0xFFFE last.
+        # This ordering is required: 0xFFFE must be the final CI/CQ/CA entry
+        # even though 65534 is numerically the largest value.
+        ctrl_ids: list[int] = []
+        if include_menu:
+            for nid, _pid, _depth, _pos, node in _walk_menu(submenus):
+                if node.get("entry_type") == "level":
+                    ctrl_ids.append(nid)
+        ctrl_ids = sorted(ctrl_ids, reverse=True)
+        if include_vol_mute:
+            ctrl_ids.append(_ID_ROOT_CTRL)
 
-            mm_label_ = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
-            mm_item = {"id": 0xffff, "name": mm_label_, "type": 0, "orig": None}
-            all_items.append(mm_item)
+        id_count = len(all_ids)
+        if id_count > 64:
+            return {"ok": False,
+                    "error": f"MT contains {id_count} IDs which exceeds the device hard limit "
+                             f"of 64. Reduce the menu size and try again."}
+        if id_count >= 56:
+            log_(f"  NOTE: MT contains {id_count} IDs (within 8 of the 64-ID hard limit).")
 
-            sv_auto  = [2]
-            # mi_groups: ordered list of (container_id, [direct child items])
-            # Built during recursion; drives MI emission in Phase 5.
-            mi_groups = []
+        total_packets = _count_total_packets(
+            frontend_cfg, ctrl_ids, include_menu, include_sync, include_macro)
+        dl_jid = total_packets   # DL always gets the highest jsonId, sent second on wire
 
-            # ID scheme confirmed by pcap (CAP2_ALL_KINDS_OF_STUFF.pcapng):
-            #   Menu nodes use a depth-based nibble-shift pattern:
-            #     depth 1 (children of main_menu): 0xFFF0, 0xFFF1, ...
-            #     depth 2: 0xFF00, 0xFF10, ...
-            #     depth 3: 0xF000, 0xF100, ...
-            #   Leaf items (ctrl/action) within the deepest menu get sequential
-            #   IDs in 0x1000 increments: 0x0000, 0x1000, 0x2000, ...
-            # The old scheme (row<<4 | col | 0xff00) was incorrect.
-            next_leaf_id = [0x0000]
-            next_menu_id_at_depth = {}  # depth -> next available menu ID
+        log_(f"  IDs={id_count}  total_packets={total_packets}  dl_jid={dl_jid}")
 
-            def _next_menu_id(depth: int) -> int:
-                shift = (3 - depth) * 4   # depth 1->8bits, 2->4bits, 3->0bits
-                base  = 0xfff0 >> ((depth - 1) * 4)
-                if depth not in next_menu_id_at_depth:
-                    next_menu_id_at_depth[depth] = base
-                cid = next_menu_id_at_depth[depth]
-                next_menu_id_at_depth[depth] = cid - (1 << shift)
-                return cid
+        # ══════════════════════════════════════════════════════════════════
+        # 1. MT -- announce all IDs
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== MT")
+        send_json_pkt("MT", {"ids": all_ids}, jid=_next_jid(),
+                      desc=f"MT ({id_count} ids)")
 
-            def walk(entries, depth):
-                """Walk entries, assign IDs, return list of all_item dicts for this level."""
-                result = []
-                for entry in entries:
-                    et = entry.get("entry_type", "")
-                    if et == "menu":
-                        container_id = _next_menu_id(depth)
-                        item = {"id": container_id, "name": entry.get("display_txt","Menu"), "type": 0, "orig": entry}
-                        all_items.append(item)
-                        children = walk(entry.get("entries", []), depth + 1)
-                        mi_groups.append((container_id, children))
-                        result.append(item)
-                    elif et == "level":
-                        lv = entry.get("level_vol", {})
-                        if not lv.get("channel") or lv.get("channel") == 1:
-                            lv["channel"] = sv_auto[0]
-                            entry["level_vol"] = lv
-                        sv_auto[0] = max(sv_auto[0], lv["channel"]) + 1
-                        item_id = next_leaf_id[0]
-                        next_leaf_id[0] += 0x1000
-                        item = {"id": item_id, "name": entry.get("display_txt",""), "type": 3, "orig": entry}
-                        all_items.append(item)
-                        entry["_push_id"] = item_id
-                        result.append(item)
-                    elif et == "action":
-                        item_id = next_leaf_id[0]
-                        next_leaf_id[0] += 0x1000
-                        item = {"id": item_id, "name": entry.get("display_txt",""), "type": 2, "orig": entry}
-                        all_items.append(item)
-                        entry["_push_id"] = item_id
-                        result.append(item)
-                return result
-
-            top_level_items = walk(main.get("entries", []), 1)
-            return all_items, mi_groups, top_level_items, sync_item, macro_item
-
-        all_items, mi_groups, top_level_items, sync_item, macro_item = assign_ids(frontend_cfg, level_items, trigger_items)
-
-        # Re-extract with IDs assigned
-        vm_item       = next((i for i in all_items if i["id"] == 0xfffe), None)
-        level_with_id = [i for i in all_items if i["type"] == 3]
-        trig_with_id  = [i for i in all_items if i["type"] == 2]
-
-        for item in level_with_id:
-            sv_ch = item["orig"].get("level_vol", {}).get("channel", 1) if item["orig"] else 1
-            log_(f"  SV {sv_ch:2d}  0x{item['id']:04x}  '{item['name']}'")
-        for idx, item in enumerate(trig_with_id, 1):
-            item["trigger_num"] = idx
-            log_(f"  TR {idx:2d}  0x{item['id']:04x}  '{item['name']}'")
-
-        # ── Phase 4: jsonId budget ────────────────────────────────────────
-        log_("=== Phase 4: jsonId budget")
-        col_to_container = {}
-        for i in all_items:
-            if i["id"] >= 0xfff0 and i["id"] not in (0xffff, 0xfffe) and i["type"] == 0:
-                col_to_container[i["id"] & 0x0f] = i
-
-        has_vm        = vm_item is not None
-        n_containers  = len(col_to_container)
-        # MI budget: count groups recursively
-        def count_groups(items):
-            if not items: return 0
-            c = 1
-            for item in items:
-                if item["type"] == 0:
-                    for cid, ch in mi_groups:
-                        if cid == item["id"]:
-                            c += count_groups(ch)
-                            break
-            return c
-        n_mi = max(1, 1 + count_groups(top_level_items))
-        n_ai          = math.ceil(len(trig_with_id) / 4) if trig_with_id else 0
-        n_lvl         = len(level_with_id)
-        n_ci = n_cq = n_ca = n_lvl * 2
-        total         = 1 + 1 + n_mi + n_ai + n_ci + n_cq + n_ca
-        dl_jid        = total
-        mi_start      = 2
-        ai_start      = mi_start + n_mi
-        ci_start      = ai_start + n_ai
-        cq_start      = ci_start + n_ci
-        ca_start      = cq_start + n_cq
-        log_(f"  Total={total}  DL={dl_jid}  MI={n_mi}  AI={n_ai}  CI/CQ/CA={n_ci} each")
-
-        # ── Phase 5: MT / DL / MI / AI ───────────────────────────────────
-        log_("=== Phase 5: MT / DL / MI / AI")
-        jid[0] = 1
-
-        # MT: all item IDs
-        seen, uid_list = set(), []
-        for i in all_items:
-            if i["id"] not in seen:
-                seen.add(i["id"])
-                uid_list.append(i["id"])
-        send_json("MT", {"ids": uid_list})
-
-        # DL: device list
-        dl_entries = []
-        for d in devs:
-            dl_entries.append({"entry": {
-                "async_ip":   d.get("asyncIp", d.get("ip", CORE_IP)),
-                "async_port": int(d.get("asyncPort", d.get("port", CORE_PORT))),
-                "ctrl_ip":    d.get("ip", CORE_IP),
-                "ctrl_port":  int(d.get("port", CORE_PORT)),
-                "ctrl_proto": "udp", "name": d["name"], "type": "general",
-            }})
+        # ══════════════════════════════════════════════════════════════════
+        # 2. DL -- device list (second on wire, highest jsonId)
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== DL")
+        dl_entries = [{"entry": {
+            "name":       d["name"],
+            "ctrl_ip":    d.get("ip", ""),
+            "ctrl_port":  int(d.get("port", 49500)),
+            "ctrl_proto": d.get("proto", "udp").lower(),
+            "async_ip":   d.get("asyncIp") or d.get("ip", ""),
+            "async_port": int(d.get("asyncPort") or d.get("port", 49500)),
+            "type":       d.get("type", "general"),
+        }} for d in devs]
         if not dl_entries:
-            dl_entries = [
-                {"entry": {"async_ip": CORE_IP, "async_port": CORE_PORT,
-                           "ctrl_ip":  CORE_IP, "ctrl_port":  CORE_PORT,
-                           "ctrl_proto": "udp", "name": DEV_NAME, "type": "general"}},
-                {"entry": {"async_ip": COMP_IP, "async_port": CMD_PORT,
-                           "ctrl_ip":  COMP_IP, "ctrl_port":  CMD_PORT,
-                           "ctrl_proto": "udp", "name": "Computer", "type": "general"}},
-            ]
-        send_json("DL", {"entries": dl_entries}, fixed_jid=dl_jid)
+            dl_entries = [{"entry": {
+                "name": "Device", "ctrl_ip": "0.0.0.0", "ctrl_port": 49500,
+                "ctrl_proto": "udp", "async_ip": "0.0.0.0", "async_port": 49500,
+                "type": "general",
+            }}]
+        send_json_pkt("DL", {"entries": dl_entries}, jid=dl_jid, desc="DL device list")
 
-        # MI packets
-        jid[0] = mi_start
-        mm_label = frontend_cfg.get("mainMenu", {}).get("display_txt", "MAIN MENU")
+        # ══════════════════════════════════════════════════════════════════
+        # 3. MI packets -- deepest leaf items FIRST, root system block LAST
+        #    All siblings sharing a parent go in ONE MI packet.
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== MI")
+        if include_menu:
+            from collections import defaultdict
+            parent_to_children: dict = defaultdict(list)
+            for nid, parent_id, depth, _pos, node in _walk_menu(submenus):
+                et = node.get("entry_type", "action")
+                # MI type string: frontend "level" -> "ctrl", others map directly
+                mi_type = "ctrl" if et == "level" else et
+                entry = {"id": nid, "txt": node.get("display_txt", ""), "type": mi_type}
+                parent_to_children[(parent_id, depth)].append((nid, entry))
 
-        def mi_entry_for(i: dict) -> dict:
-            """Build the inner 'entry' dict for an MI packet item.
+            # Sort deepest first, then by parent_id descending (mirrors push.py sort)
+            sorted_groups = sorted(
+                parent_to_children.items(),
+                key=lambda x: (-x[0][1], -x[0][0])
+            )
 
-            Pcap-confirmed type strings and extra fields per type:
-              type 0 (menu):   "menu" -- main_menu also gets initMacro fields
-              type 2 (action): "action"
-              type 3 (ctrl):   "ctrl"
-              type 4 (sync):   "sync"
-              type 5 (macro):  "macro" + initMacro/initMacroDelay/interCmdDelay
-            """
-            t = i["type"]
-            if t == 3:
-                return {"id": i["id"], "txt": i["name"], "type": "ctrl"}
-            if t == 2:
-                return {"id": i["id"], "txt": i["name"], "type": "action"}
-            if t == 4:
-                return {"id": i["id"], "txt": i["name"], "type": "sync"}
-            if t == 5:
-                orig = i.get("orig") or {}
-                return {
-                    "id": i["id"], "txt": i["name"], "type": "macro",
-                    "initMacro":      True,
-                    "initMacroDelay": int(orig.get("initMacroDelay", 3)),
-                    "interCmdDelay":  int(orig.get("interCmdDelay", 100)),
-                }
-            # type 0: menu. The main_menu node (0xFFFF) also carries initMacro fields
-            # per the pcap (frame 11: "initMacro":true on the CustomTitle entry).
-            orig = i.get("orig") or {}
-            if i["id"] == 0xffff:
-                return {
-                    "id": i["id"], "txt": i["name"], "type": "menu",
-                    "initMacro":      True,
-                    "initMacroDelay": int(orig.get("initMacroDelay", 3)),
-                    "interCmdDelay":  int(orig.get("interCmdDelay", 100)),
-                }
-            return {"id": i["id"], "txt": i["name"], "type": "menu"}
+            for (parent_id, depth), children in sorted_groups:
+                entries = [{"entry": e} for _nid, e in children]
+                ids     = [e["entry"]["id"] for e in entries]
+                send_json_pkt("MI", {
+                    "entries": entries,
+                    "first":   ids[0],
+                    "last":    ids[-1],
+                }, jid=_next_jid(), desc=f"MI children of 0x{parent_id:04X} depth {depth}")
 
-        # Root MI group (jid=miStart): all reserved root-level entries in order:
-        #   0xFFFE ctrl, 0xFFFD sync, 0xFFFB macro, 0xFFFF menu
-        # This matches the pcap frame 11 entry order exactly.
-        g1_items = []
-        if vm_item:
-            g1_items.append(vm_item)
-        if sync_item:
-            g1_items.append(sync_item)
-        if macro_item:
-            g1_items.append(macro_item)
-        # Always include the main_menu entry; look it up in all_items.
-        mm_item_ref = next((i for i in all_items if i["id"] == 0xffff), None)
-        if mm_item_ref:
-            g1_items.append(mm_item_ref)
+        # Root system MI block -- always LAST among MI packets (send order).
+        # jsonId assignment: push.py assigns jids sequentially with _next_seq().
+        # MT=1, leaf MIs=2..N in send order, root MI=N+1.
+        # The findings doc notes "jsonId=2 for root MI" by value-assignment order,
+        # but push.py contradicts this: leaf MIs are sent first via _next_seq()
+        # so they get the lower jids. We follow push.py as the ground truth:
+        # root MI gets the next jid in sequence here.
+        root_entries = []
+        if include_sync:
+            root_entries.append({"entry": {
+                "id": _ID_SYNC,
+                "txt": (sync_ctrl or {}).get("display_txt", "Sync Action"),
+                "type": "sync",
+            }})
+        if include_macro:
+            orig = macro_ctrl or {}
+            root_entries.append({"entry": {
+                "id":             _ID_INIT_MACRO,
+                "txt":            orig.get("display_txt", "Init Macro"),
+                "type":           "macro",
+                "initMacro":      True,
+                "initMacroDelay": int(orig.get("initMacroDelay", 3)),
+                "interCmdDelay":  int(orig.get("interCmdDelay", 100)),
+            }})
+        if include_vol_mute:
+            vm = frontend_cfg.get("volMuteScreen") or {}
+            root_entries.append({"entry": {
+                "id":  _ID_ROOT_CTRL,
+                "txt": vm.get("display_txt", ""),
+                "type": "ctrl",
+            }})
+        if include_menu:
+            mm = frontend_cfg.get("mainMenu") or {}
+            root_entries.append({"entry": {
+                "id":  _ID_TOP_MENU,
+                "txt": mm.get("display_txt", "MAIN MENU"),
+                "type": "menu",
+            }})
 
-        g1_entries = [{"entry": mi_entry_for(i)} for i in g1_items]
-        g1_ids = [i["id"] for i in g1_items]
-        send_json("MI", {"entries": g1_entries, "first": min(g1_ids), "last": max(g1_ids)},
-                  fixed_jid=mi_start)
+        if root_entries:
+            root_ids = [e["entry"]["id"] for e in root_entries]
+            send_json_pkt("MI", {
+                "entries": root_entries,
+                "first":   root_ids[0],
+                "last":    root_ids[-1],
+            }, jid=_next_jid(), desc="MI root system block")
 
-        jid[0] = mi_start + 1
-        # BFS queue: each element is a list of items to emit as one MI group.
-        # Each menu entry's children form the next group in BFS order.
-        bfs_queue = [top_level_items]
-        while bfs_queue:
-            group = bfs_queue.pop(0)
-            if not group:
-                continue
-            entries = [{"entry": mi_entry_for(i)} for i in group]
-            ids = [i["id"] for i in group]
-            send_json("MI", {"entries": entries, "first": min(ids), "last": max(ids)})
-            for item in group:
-                if item["type"] == 0:
-                    for container_id, children in mi_groups:
-                        if container_id == item["id"] and children:
-                            bfs_queue.append(children)
-                            break
+        # ══════════════════════════════════════════════════════════════════
+        # 4. AI packets -- macro m_action first, then action groups by parent
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== AI")
 
-        # AI: trigger actions (3rd_party action entries)
-        jid[0] = ai_start
-        for bs in range(0, len(trig_with_id), 4):
-            batch = trig_with_id[bs:bs+4]
-            entries = []
-            for item in batch:
-                orig = item["orig"] or {}
-                raw_bytes = orig.get("bytes") or ([ord(c) for c in f"TR {item['trigger_num']}"] + [0x0d])
-                dev = orig.get("dev", DEV_NAME)
-                entries.append({"entry": {"action": {
-                    "bin": orig.get("binary", False),
-                    "bytes": raw_bytes, "dev": dev, "type": "3rd_party",
-                }, "id": item["id"], "type": "action"}})
-            if entries:
-                ids = [e["entry"]["id"] for e in entries]
-                send_json("AI", {"entries": entries, "first": min(ids), "last": max(ids)})
-
-        # AI: init_macro sub-actions (m_action entries, pcap frames 15-16).
-        # Each macro sub-action is sent as a separate AI packet with type "m_action".
-        # The macro item id is 0xFFFB; each entry has an idx and name.
-        if macro_item:
-            orig_macro = macro_item.get("orig") or {}
-            macro_entries_raw = orig_macro.get("entries", [])
-            m_action_entries = []
-            for idx, sub in enumerate(macro_entries_raw):
-                sub_bytes = sub.get("bytes", [])
-                sub_dev   = sub.get("dev", DEV_NAME)
-                m_action_entries.append({"entry": {
-                    "id": 0xfffb,
+        if include_macro:
+            orig = macro_ctrl or {}
+            macro_cmds = orig.get("entries", [])
+            m_entries = [
+                {"entry": {
+                    "id":       _ID_INIT_MACRO,
+                    "type":     "m_action",
                     "m_action": {
+                        "idx":    idx,
+                        "name":   cmd.get("display_txt", f"CMD {idx}"),
                         "action": {
-                            "bin":   sub.get("binary", False),
-                            "bytes": sub_bytes,
-                            "dev":   sub_dev,
+                            "bin":   cmd.get("binary", False),
+                            "bytes": cmd.get("bytes", []),
+                            "dev":   cmd.get("dev", ""),
                             "type":  "3rd_party",
                         },
-                        "idx":  idx,
-                        "name": sub.get("display_txt", f"MACRO {idx}"),
                     },
-                    "type": "m_action",
-                }})
-            if m_action_entries:
-                send_json("AI", {"entries": m_action_entries,
-                                 "first": 0xfffb, "last": 0xfffb})
+                }}
+                for idx, cmd in enumerate(macro_cmds)
+            ]
+            if m_entries:
+                send_json_pkt("AI", {
+                    "entries": m_entries,
+                    "first":   _ID_INIT_MACRO,
+                    "last":    _ID_INIT_MACRO,
+                }, jid=_next_jid(), desc="AI macro commands")
 
-        # ── Phase 6: CI / CQ / CA ─────────────────────────────────────────
-        log_("=== Phase 6: CI / CQ / CA")
-        # Ordering per pcap: leaf (sub-menu) ctrl items sorted descending by id,
-        # then root-level ctrl items (>=0xfff0) sorted descending by id.
-        # The sync control (0xFFFD) goes into this same ordered list as its own
-        # special entry (ctrlType "sync") with no vol/mute pairing.
-        sub_o  = sorted([i for i in level_with_id if i["id"] < 0xfff0],  key=lambda x: x["id"], reverse=True)
-        root_o = sorted([i for i in level_with_id if i["id"] >= 0xfff0], key=lambda x: x["id"], reverse=True)
-        ordered = sub_o + root_o
+        if include_menu:
+            from collections import defaultdict
+            action_groups: dict = defaultdict(list)
+            for nid, parent_id, _depth, _pos, node in _walk_menu(submenus):
+                if node.get("entry_type") == "action":
+                    action_groups[parent_id].append((nid, node))
 
-        jid[0] = ci_start
-        for item in ordered:
-            orig    = item["orig"] or {}
-            vol     = orig.get("level_vol",  {})
-            mute    = orig.get("level_mute", {})
-            sv_ch   = int(vol.get("channel", 1))
-            MIN_DB  = int(vol.get("minParam", -100))
-            MAX_DB  = int(vol.get("maxParam",  20))
-            STEP    = int(vol.get("stepSize",   2))
-            POLL_MS = int(vol.get("pollMs",   500))
-            dev     = vol.get("set_dev_name", DEV_NAME)
-            # Always derive correct byte masks from the SV channel
-            # Use stored bytes if present, otherwise generate from channel number
-            set_bytes  = vol.get("setBytes")  or _sv_set_bytes(sv_ch)
-            qry_bytes  = vol.get("queryBytes") or _sv_query_bytes(sv_ch)
-            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
-            send_json("CI", {"ack": False, "ackMask": [], "active": [], "altActive": [], "altInactive": [],
-                "altRespState": False, "async": False, "bin": False, "cmdMask": [],
-                "ctrlType": "mute", "dev": dev, "headerTxt": "", "id": item["id"],
-                "inactive": [], "lvlPostStr": "", "lvlPreStr": "", "max": 0, "min": 0,
-                "paramDecPt": 0, "query": False, "step": 0, "trim": False, "type": "stateless"})
-            send_json("CI", {"ack": False, "ackMask": [], "active": [], "altActive": [], "altInactive": [],
-                "altRespState": False, "async": True, "bin": orig.get("binary", False),
-                "cmdMask": set_bytes,
-                "ctrlType": "vol", "dev": dev, "headerTxt": vol.get("headerText", ""),
-                "id": item["id"], "inactive": [], "lvlPostStr": vol.get("lvlPostStr", ""),
-                "lvlPreStr": vol.get("lvlPreStr", ""), "max": MAX_DB, "min": MIN_DB,
-                "paramDecPt": int(vol.get("paramDecPts", 0)), "query": vol.get("queryEnable", True),
-                "step": STEP, "trim": vol.get("trimEnable", False), "type": "explicit"})
+            for parent_id, actions in sorted(action_groups.items(), key=lambda x: -x[0]):
+                entries = [{"entry": {
+                    "action": {
+                        "bin":   node.get("binary", False),
+                        "bytes": node.get("bytes", []),
+                        "dev":   node.get("dev", ""),
+                        "type":  "3rd_party",
+                    },
+                    "id":   nid,
+                    "type": "action",
+                }} for nid, node in actions]
+                ids = [nid for nid, _ in actions]
+                send_json_pkt("AI", {
+                    "entries": entries,
+                    "first":   ids[0],
+                    "last":    ids[-1],
+                }, jid=_next_jid(), desc=f"AI actions under 0x{parent_id:04X}")
 
-        jid[0] = cq_start
-        for item in ordered:
-            orig    = item["orig"] or {}
-            vol     = orig.get("level_vol",  {})
-            sv_ch   = int(vol.get("channel", 1))
-            dev     = vol.get("set_dev_name", DEV_NAME)
-            POLL_MS = int(vol.get("pollMs", 500))
-            set_bytes  = vol.get("setBytes")  or _sv_set_bytes(sv_ch)
-            qry_bytes  = vol.get("queryBytes") or _sv_query_bytes(sv_ch)
-            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
-            send_json("CQ", {"altRespState": False, "bin": False, "cmdMask": [],
-                "ctrlType": "mute", "dev": dev, "id": item["id"],
-                "pollMsec": POLL_MS, "respMask": []})
-            send_json("CQ", {"altRespState": False, "bin": False,
-                "cmdMask":  qry_bytes,
-                "ctrlType": "vol", "dev": dev, "id": item["id"],
-                "pollMsec": POLL_MS,
-                "respMask": resp_bytes})
+        # ══════════════════════════════════════════════════════════════════
+        # 5. CI/CQ/CA -- vol BEFORE mute per item, 0xFFFE last
+        #    Ordering: all child ctrl IDs descending, then 0xFFFE.
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== CI")
 
-        jid[0] = ca_start
-        for item in ordered:
-            orig    = item["orig"] or {}
-            vol     = orig.get("level_vol", {})
-            sv_ch   = int(vol.get("channel", 1))
-            dev     = vol.get("set_dev_name", DEV_NAME)
-            resp_bytes = vol.get("respQueryBytes") or _sv_set_bytes(sv_ch)
-            send_json("CA", {"altRespState": False, "bin": False, "ctrlType": "mute",
-                "dev": dev, "id": item["id"], "matchSrc": True, "msgMask": []})
-            send_json("CA", {"altRespState": False, "bin": False, "ctrlType": "vol",
-                "dev": dev, "id": item["id"], "matchSrc": True,
-                "msgMask": resp_bytes})
+        # Build ctrl param map: ctrl_id -> {vol, mute node dicts}
+        ctrl_params: dict = {}
+        if include_vol_mute:
+            vm = frontend_cfg.get("volMuteScreen") or {}
+            ctrl_params[_ID_ROOT_CTRL] = {
+                "vol":  vm.get("level_vol")  or {},
+                "mute": vm.get("level_mute") or {},
+                "lvl_pre":  (vm.get("level_vol") or {}).get("levelPreStr", ""),
+                "lvl_post": (vm.get("level_vol") or {}).get("levelPostStr", ""),
+            }
+        if include_menu:
+            for nid, _pid, _depth, _pos, node in _walk_menu(submenus):
+                if node.get("entry_type") == "level":
+                    ctrl_params[nid] = {
+                        "vol":      node.get("level_vol")  or {},
+                        "mute":     node.get("level_mute") or {},
+                        "lvl_pre":  (node.get("level_vol") or {}).get("levelPreStr", ""),
+                        "lvl_post": (node.get("level_vol") or {}).get("levelPostStr", ""),
+                    }
 
-        # Sync control (0xFFFD) gets its own CI/CQ/CA triplet with ctrlType "sync".
-        # The pcap shows the cmdMask carries the STARTUP SYNC query bytes.
-        if sync_item:
-            sync_orig   = sync_item.get("orig") or {}
-            init_sync   = sync_orig.get("init_sync", {})
-            sync_qbytes = init_sync.get("queryBytes", [])
-            send_json("CI", {
-                "active": [], "altActive": [], "altInactive": [],
-                "altRespState": False, "async": False, "bin": False,
-                "ctrlType": "sync", "dev": "", "id": 0xfffd,
-                "inactive": [], "query": False, "type": "stateless",
-            })
-            send_json("CQ", {
-                "bin": False, "cmdMask": sync_qbytes,
-                "ctrlType": "sync", "dev": "", "id": 0xfffd,
-                "pollMsec": 500, "respMask": [],
-            })
-            send_json("CA", {
-                "bin": False, "ctrlType": "sync", "dev": "", "id": 0xfffd,
-                "matchSrc": True, "msgMask": [],
-            })
+        def _ci(ctrl_id: int, ctrl_type: str, p: dict) -> None:
+            """Send one CI packet. vol MUST be sent before mute for each item."""
+            if ctrl_type == "vol":
+                vol = p["vol"]
+                send_json_pkt("CI", {
+                    "ack":          False,
+                    "ackMask":      [],
+                    "active":       vol.get("active", []),
+                    "altActive":    vol.get("altActive", []),
+                    "altInactive":  vol.get("altInactive", []),
+                    "altRespState": bool(vol.get("queryAltResponse", False)),
+                    "async":        False,
+                    "bin":          False,
+                    "cmdMask":      vol.get("setBytes", []),
+                    "ctrlType":     "vol",
+                    "dev":          vol.get("set_dev_name", ""),
+                    "headerTxt":    vol.get("headerText", ""),
+                    "id":           ctrl_id,
+                    "inactive":     vol.get("inactive", []),
+                    "lvlPostStr":   p["lvl_post"],
+                    "lvlPreStr":    p["lvl_pre"],
+                    "max":          float(vol.get("maxParam", 0.0)),
+                    "min":          float(vol.get("minParam", -30.0)),
+                    "paramDecPt":   int(vol.get("paramDecPts", 0)),
+                    "query":        bool(vol.get("queryEnable", False)),
+                    "step":         float(vol.get("stepSize", 1.0)),
+                    "trim":         bool(vol.get("trimEnable", False)),
+                    "type":         "stateless",
+                }, jid=_next_jid(), desc=f"CI 0x{ctrl_id:04X} vol")
+            else:  # mute
+                mute = p["mute"]
+                send_json_pkt("CI", {
+                    "ack":          False,
+                    "ackMask":      [],
+                    "active":       mute.get("active", []),
+                    "altActive":    mute.get("altActive", []),
+                    "altInactive":  mute.get("altInactive", []),
+                    "altRespState": False,
+                    "async":        False,
+                    "bin":          False,
+                    "cmdMask":      [],
+                    "ctrlType":     "mute",
+                    "dev":          mute.get("set_dev_name", ""),
+                    "headerTxt":    "",
+                    "id":           ctrl_id,
+                    "inactive":     mute.get("inactive", []),
+                    "lvlPostStr":   "",
+                    "lvlPreStr":    "",
+                    "max":          0.0,
+                    "min":          0.0,
+                    "paramDecPt":   0,
+                    "query":        False,
+                    "step":         0.0,
+                    "trim":         False,
+                    "type":         "stateless",
+                }, jid=_next_jid(), desc=f"CI 0x{ctrl_id:04X} mute")
 
-        # ── Phase 7: SF 1 (finalize) + batch result + commit ────────────
-        log_("=== Phase 7: SF finalize + batch result + commit")
+        for ci_id in ctrl_ids:
+            p = ctrl_params.get(ci_id, {"vol": {}, "mute": {}, "lvl_pre": "", "lvl_post": ""})
+            _ci(ci_id, "vol",  p)   # vol FIRST (confirmed requirement)
+            _ci(ci_id, "mute", p)   # mute SECOND
 
-        # SF 1: signals device that push sequence is complete
-        # Device will not send batch result until SF is received
-        log_(f"  SF     -> {send_raw('SF 1\r')}")
+        log_("=== CQ")
+        for ci_id in ctrl_ids:
+            p   = ctrl_params.get(ci_id, {"vol": {}})
+            vol = p["vol"]
+            send_json_pkt("CQ", {
+                "altRespState": False,
+                "bin":          False,
+                "cmdMask":      vol.get("queryBytes", []),
+                "ctrlType":     "vol",
+                "dev":          vol.get("set_dev_name", ""),
+                "id":           ci_id,
+                "pollMsec":     int(vol.get("pollMs", 500)),
+                "respMask":     vol.get("respQueryBytes", []),
+            }, jid=_next_jid(), desc=f"CQ 0x{ci_id:04X} vol")
+            send_json_pkt("CQ", {
+                "altRespState": False,
+                "bin":          False,
+                "cmdMask":      [],
+                "ctrlType":     "mute",
+                "dev":          (p.get("mute") or {}).get("set_dev_name", ""),
+                "id":           ci_id,
+                "pollMsec":     500,
+                "respMask":     [],
+            }, jid=_next_jid(), desc=f"CQ 0x{ci_id:04X} mute")
 
-        # Batch result arrives ~5 seconds after SF
-        sock.settimeout(8)
-        batch = None
+        log_("=== CA")
+        for ci_id in ctrl_ids:
+            p   = ctrl_params.get(ci_id, {"vol": {}})
+            vol = p["vol"]
+            send_json_pkt("CA", {
+                "altRespState": False,
+                "bin":          False,
+                "ctrlType":     "vol",
+                "dev":          vol.get("set_dev_name", ""),
+                "id":           ci_id,
+                "matchSrc":     True,
+                "msgMask":      vol.get("respQueryBytes", []),
+            }, jid=_next_jid(), desc=f"CA 0x{ci_id:04X} vol")
+            send_json_pkt("CA", {
+                "altRespState": False,
+                "bin":          False,
+                "ctrlType":     "mute",
+                "dev":          (p.get("mute") or {}).get("set_dev_name", ""),
+                "id":           ci_id,
+                "matchSrc":     True,
+                "msgMask":      [],
+            }, jid=_next_jid(), desc=f"CA 0x{ci_id:04X} mute")
+
+        # ══════════════════════════════════════════════════════════════════
+        # 6. Sync CI/CQ/CA (after all vol/mute ctrl items)
+        # ══════════════════════════════════════════════════════════════════
+        if include_sync:
+            log_("=== Sync CI/CQ/CA")
+            orig        = sync_ctrl or {}
+            init_sync   = orig.get("init_sync", {})
+            active_b    = init_sync.get("activeBytes",   list(b"ACTIVE\r"))
+            inactive_b  = init_sync.get("inactiveBytes", list(b"INACTIVE\r"))
+            sync_dev    = orig.get("dev", "")
+
+            send_json_pkt("CI", {
+                "active":       active_b,
+                "altActive":    [],
+                "altInactive":  [],
+                "altRespState": False,
+                "async":        False,
+                "bin":          False,
+                "ctrlType":     "sync",
+                "dev":          sync_dev,
+                "id":           _ID_SYNC,
+                "inactive":     inactive_b,
+                "query":        False,
+                "type":         "stateless",
+            }, jid=_next_jid(), desc="CI sync")
+
+            send_json_pkt("CQ", {
+                "bin":      False,
+                "cmdMask":  init_sync.get("queryBytes", []),
+                "ctrlType": "sync",
+                "dev":      sync_dev,
+                "id":       _ID_SYNC,
+                "pollMsec": 500,
+                "respMask": [],
+            }, jid=_next_jid(), desc="CQ sync")
+
+            send_json_pkt("CA", {
+                "bin":      False,
+                "ctrlType": "sync",
+                "dev":      sync_dev,
+                "id":       _ID_SYNC,
+                "matchSrc": True,
+                "msgMask":  [],
+            }, jid=_next_jid(), desc="CA sync")
+
+        # ══════════════════════════════════════════════════════════════════
+        # 7. SF 1 -- finalize / commit
+        # ══════════════════════════════════════════════════════════════════
+        log_("=== SF")
+        sock.sendto(b"SF 1\r", (HOST, CMD_PORT))
+        log_("  [SF ]       SF 1")
+
+        # Wait up to 5s for the result JSON blob.  The device must finish
+        # processing every prior packet, commit the menu, then send the ACK
+        # and the result JSON.  On a large push the JSON can arrive well
+        # after the ACK.  We keep reading until we get the JSON or time out;
+        # unlike the per-packet ACK loop we do NOT break on the first silence
+        # window because the device may still be working.
+        result_json = None
+        got_sf_ack  = False
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            sock.settimeout(min(remaining, 0.5))
+            try:
+                raw, _ = sock.recvfrom(65535)
+                r = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                log_(f"              << {r[:120]!r}")
+                if "ACK SF" in r:
+                    got_sf_ack = True
+                if r.strip().startswith("{"):
+                    try:
+                        result_json = json.loads(r.strip())
+                        break   # result JSON received, done
+                    except json.JSONDecodeError:
+                        pass
+            except socket.timeout:
+                # Keep polling until the deadline; result JSON can arrive
+                # in a separate packet from the ACK SF on some firmware.
+                pass
+        sock.settimeout(TIMEOUT)
+
+        if result_json:
+            jids = result_json.get("json_ids", [])
+            rids = result_json.get("result_ids", [])
+            bad  = [(jids[i], rids[i]) for i in range(len(rids)) if rids[i] != 0]
+            if bad:
+                log_(f"  DEVICE REPORTED {len(bad)} ERROR(S): {bad}")
+            else:
+                log_(f"  Device accepted all {len(jids)} tracked packets.")
+        else:
+            log_("  WARNING: No result JSON received from device.")
+
+        # ══════════════════════════════════════════════════════════════════
+        # Post-SF: SCM + SMID (mirrors push.py post-push block)
+        # SMID is cosmetic (device accepts any 32-hex string); don't treat
+        # a timeout as a failure -- device may still be committing internally.
+        # ══════════════════════════════════════════════════════════════════
+        send_raw(f"SCM {cm}")
+        h = uuid.uuid4().hex
+        h = uuid.uuid4().hex
+        # SMID is cosmetic; device accepts any 32-hex string.
+        # Give the device up to 1s -- it may still be committing after SF.
+        sock.settimeout(1.0)
+        sock.sendto(f'SMID {h}\r'.encode(), (HOST, CMD_PORT))
+        smid_resp = []
         try:
-            while True:
-                data, _ = sock.recvfrom(65535)
-                t = data.decode("latin-1", errors="replace").strip()
-                if t.startswith("{") and '"json_ids"' in t:
-                    batch = t
-                    break
-                # If batch result arrives as response to something else, catch it
-                if '"result_ids"' in t:
-                    batch = t
-                    break
+            pkt, _ = sock.recvfrom(65535)
+            smid_resp.append(pkt.decode('utf-8', errors='replace').rstrip('\r\n'))
         except socket.timeout:
             pass
+        sock.settimeout(TIMEOUT)
+        smid_ok = any('ACK SMID' in r for r in smid_resp)
+        log_(f"  {'OK  ' if smid_ok else 'WARN'}  SMID {h}  ->  {smid_resp[0] if smid_resp else 'no response'}")
 
-        if batch:
-            log_(f"  Batch result: {batch[:120]}")
-            try:
-                obj = json.loads(batch)
-                bad = [(j, rc) for j, rc in zip(obj["json_ids"], obj["result_ids"]) if rc != 0]
-                log_(f"  {len(bad)} failed" if bad else f"  All {len(obj['json_ids'])} packets OK")
-            except Exception:
-                log_("  (Could not parse batch result)")
-        else:
-            log_("  WARNING: No batch result -- proceeding anyway")
-
-        sock.settimeout(2)
-        log_(f"  SCM   -> {send_raw('SCM THIRD_PARTY\r')}")
-        h = uuid.uuid4().hex
-        log_(f"  SMID  -> {send_raw(f'SMID {h}\r')}")
-        log_(f"OK  Committed. Hash: {h}")
+        log_(f"OK  Config committed. Hash: {h}")
         return {"ok": True, "hash": h, "error": None}
 
     except Exception as exc:
