@@ -5,6 +5,7 @@ All other modules import from here instead of declaring their own globals.
 """
 
 import logging
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -13,7 +14,14 @@ log = logging.getLogger("axon")
 
 CMD_PORT   = 49494
 ASYNC_PORT = 49500
-STATIC_DIR = Path(__file__).parent.parent.parent / "frontend" / "dist"
+
+if getattr(sys, "frozen", False):
+    # PyInstaller bundle: _MEIPASS is the extraction root
+    _BASE = Path(sys._MEIPASS)
+else:
+    _BASE = Path(__file__).parent.parent.parent
+
+STATIC_DIR = _BASE / "frontend" / "dist"
 
 # ip -> device state dict
 devices: dict[str, dict] = {}
