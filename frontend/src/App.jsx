@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { C, MONO, SANS, G } from "./tokens.js";
 import { addLog } from "./helpers.js";
-import { mkDefaultConfig } from "./defaultData.js";
+import { mkDefaultConfig, mkDevice } from "./defaultData.js";
 import C1Sim from "./components/C1Sim.jsx";
 import MenuBuilder from "./components/MenuBuilder.jsx";
 import DeviceListPanel from "./components/DeviceListPanel.jsx";
@@ -39,11 +39,47 @@ const _mkC1FromDevice = (d) => {
   return _applyDeviceInfo(base, d);
 };
 
+// After a sync overwrites mainMenu, restore user-only fields (queryBytes, respQueryBytes)
+// that the C1 device never stores — matched by the stable "dev_XXXX" level IDs.
+const _preserveUserBytes = (newMenu, oldMenu) => {
+  if (!newMenu || !oldMenu) return newMenu;
+  const oldMap = {};
+  const collect = (entries) => {
+    for (const e of (entries || [])) {
+      if (e.id) oldMap[e.id] = e;
+      if (e.entries) collect(e.entries);
+    }
+  };
+  collect(oldMenu.entries);
+  const patch = (entries) => (entries || []).map(e => {
+    const old = oldMap[e.id];
+    let out = e;
+    if (e.entry_type === "level" && old) {
+      out = {
+        ...e,
+        level_vol:  { ...e.level_vol,
+          queryBytes:     old.level_vol?.queryBytes     ?? [],
+          respQueryBytes: old.level_vol?.respQueryBytes ?? [],
+        },
+        level_mute: { ...e.level_mute,
+          queryBytes: old.level_mute?.queryBytes ?? [],
+        },
+      };
+    }
+    if (out.entries) out = { ...out, entries: patch(out.entries) };
+    return out;
+  });
+  return { ...newMenu, entries: patch(newMenu.entries) };
+};
+
 // --- Root App -----------------------------------------------------------------
 export default function App() {
   const [c1List, setC1List]         = useState([]);
   const [selectedC1, setSelectedC1] = useState(null);
+  const [syncing, setSyncing]       = useState(false);
   const [tab, setTab]               = useState("builder");
+  const pushRunRef                  = useRef(null);
+  const blockNextSyncRef            = useRef(false); // set true after failed push to suppress config overwrite
   const [navState, setNavState] = useState({ view:"root", path:[] });
 
   const navigate = useCallback((action) => {
@@ -205,23 +241,32 @@ export default function App() {
     let retryMs = 500;
 
     function applyDeviceSynced(device_ip, liveConfig, summary) {
+      const blocked = blockNextSyncRef.current;
+      if (blocked) {
+        blockNextSyncRef.current = false;
+        addLog("INFO", `Sync from ${device_ip} suppressed (last push had errors) — config preserved.`);
+        return;
+      }
       addLog("ACK", `Synced ${device_ip}: ${summary?.levels ?? 0} levels, ${summary?.triggers ?? 0} triggers, fw=${summary?.firmware ?? "?"}`);
       setC1List(prev => {
         const idx = prev.findIndex(u => u.ip === device_ip);
         if (idx < 0) {
           const newUnit = _mkC1FromDevice({ ip: device_ip, ...liveConfig });
-          newUnit.config = { ...newUnit.config, ...liveConfig, devices: newUnit.config?.devices ?? liveConfig.devices };
+          newUnit.config = { ...newUnit.config, ...liveConfig, devices: liveConfig.devices ?? [] };
           setSelectedC1(cur => cur ?? newUnit.id);
           return [...prev, newUnit];
         }
         const next = [...prev];
         const existing = next[idx];
+        const mergedCfg = { ...existing.config, ...liveConfig, devices: liveConfig.devices ?? [] };
+        if (mergedCfg.mainMenu && existing.config.mainMenu)
+          mergedCfg.mainMenu = _preserveUserBytes(mergedCfg.mainMenu, existing.config.mainMenu);
         next[idx] = {
           ...existing,
           name:     liveConfig.deviceName || existing.name,
           mac:      liveConfig.mac        || existing.mac,
           firmware: liveConfig.firmwareVersion || existing.firmware,
-          config:   { ...existing.config, ...liveConfig, devices: existing.config?.devices ?? liveConfig.devices },
+          config:   mergedCfg,
         };
         return next;
       });
@@ -263,9 +308,7 @@ export default function App() {
             const { device_ip, config: liveConfig, summary } = msg;
             if (device_ip && liveConfig) applyDeviceSynced(device_ip, liveConfig, summary);
           } else if (msg.type === "sync_log") {
-            if (msg.msg?.startsWith("===") || msg.msg?.startsWith("OK")) {
-              addLog("INFO", `[${msg.device_ip}] ${msg.msg}`);
-            }
+            addLog("SYNC", `[${msg.device_ip}] ${msg.msg}`);
           }
         } catch {}
       };
@@ -281,6 +324,7 @@ export default function App() {
   const syncDevice = useCallback((ip) => {
     if (!ip || ip === "192.168.1.xxx") return;
     addLog("INFO", `Loading config from ${ip}...`);
+    setSyncing(true);
     fetch(`/api/device/${ip}/sync`, { method: "POST" })
       .then(async res => {
         const reader = res.body.getReader();
@@ -304,9 +348,12 @@ export default function App() {
                     if (idx < 0) return prev;
                     const next = [...prev];
                     const ex = next[idx];
+                    const syncedCfg = { ...ex.config, ...liveConfig, devices: (liveConfig.devices ?? []).map(d => d.id ? d : { ...d, id: crypto.randomUUID() }) };
+                    if (syncedCfg.mainMenu && ex.config.mainMenu)
+                      syncedCfg.mainMenu = _preserveUserBytes(syncedCfg.mainMenu, ex.config.mainMenu);
                     next[idx] = { ...ex, name: liveConfig.deviceName || ex.name,
                       mac: liveConfig.mac || ex.mac, firmware: liveConfig.firmwareVersion || ex.firmware,
-                      config: { ...ex.config, ...liveConfig, devices: ex.config?.devices ?? liveConfig.devices } };
+                      config: syncedCfg };
                     return next;
                   });
                   addLog("ACK", `Config loaded: ${summary?.levels ?? 0} levels, ${summary?.triggers ?? 0} triggers`);
@@ -316,7 +363,8 @@ export default function App() {
           }
         }
       })
-      .catch(e => addLog("ERR", `Sync request failed: ${e.message}`));
+      .catch(e => addLog("ERR", `Sync request failed: ${e.message}`))
+      .finally(() => setSyncing(false));
   }, []);
 
   useEffect(() => {
@@ -424,7 +472,7 @@ export default function App() {
   const breadcrumb = (() => {
     if (tab !== "builder") return null;
     if (navState.view === "root") return null;
-    const mmLabel = cfg.mainMenu?.display_txt || "MAIN MENU";
+    const mmLabel = cfg.mainMenu?.display_txt || "";
     if (navState.path.length === 0) return [{ label: mmLabel }];
     return [{ label: mmLabel }, ...navState.path.map(s=>({ label:s.label }))];
   })();
@@ -476,7 +524,7 @@ export default function App() {
         <div style={{ padding:"16px 14px 12px", borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
           <div style={{ fontSize:13, fontWeight:600, color:C.text, letterSpacing:"-0.01em" }}>Axon C1</div>
           <div style={{ fontSize:10, color:C.dim, marginTop:2, fontFamily:MONO, letterSpacing:"0.02em" }}>
-            configurator v{cfg.firmwareVersion}
+            configurator
           </div>
         </div>
 
@@ -495,7 +543,12 @@ export default function App() {
               onClick={() => { setSelectedDevice(d.name); setTab("devices"); }}
             />
           ))}
-          <SbAddRow label="Add device" onClick={() => { setTab("devices"); }} />
+          <SbAddRow label="Add device" onClick={() => {
+            const d = mkDevice("New Device", "10.0.0.1");
+            setDevices(ds => [...ds, d]);
+            setSelectedDevice(d.name);
+            setTab("devices");
+          }} />
 
           <SbSection>Units</SbSection>
           <div style={{ padding:"4px 14px 6px", display:"flex", gap:6, alignItems:"center" }}>
@@ -506,7 +559,7 @@ export default function App() {
               display:"flex", alignItems:"center", justifyContent:"center", gap:5,
               transition:"all .12s",
             }}>
-              <span style={{ fontSize:10 }}>{scanning ? "&#8987;" : "&#8981;"}</span>
+              <span style={{ fontSize:10 }}>{scanning ? "⏳" : "⟳"}</span>
               {scanning ? "Scanning..." : "Scan network"}
             </button>
             <button onClick={() => {
@@ -519,14 +572,15 @@ export default function App() {
             }} title="Add by IP">+</button>
           </div>
 
+          <div style={{ padding:"2px 14px 6px" }}>
+            <div style={{ fontSize:9.5, color:C.dim, marginBottom:3, opacity:.7 }}>Host NIC</div>
+            <NicPicker value={scanNic} onChange={setScanNic} compact />
+          </div>
+
           {c1List.length === 0 && !scanning && (
-            <div style={{ padding:"8px 14px", fontSize:11, color:C.dim, lineHeight:1.8 }}>
+            <div style={{ padding:"4px 14px 6px", fontSize:11, color:C.dim, lineHeight:1.8 }}>
               No devices found yet.<br/>
-              <span style={{ color:C.dim }}>Scan will run automatically on start.</span>
-              <div style={{ marginTop:6 }}>
-                <div style={{ fontSize:10, color:C.dim, marginBottom:3 }}>Host NIC</div>
-                <NicPicker value={scanNic} onChange={setScanNic} compact />
-              </div>
+              <span style={{ fontSize:10, color:C.dim, opacity:.7 }}>Scan runs automatically on start.</span>
             </div>
           )}
 
@@ -542,7 +596,7 @@ export default function App() {
       </div>
 
       {/* MAIN COLUMN */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0 }}>
+      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0, position:"relative" }}>
 
         {/* Context / breadcrumb bar */}
         <div style={{
@@ -583,13 +637,50 @@ export default function App() {
             </span>
           )}
           <div style={{ flex:1 }} />
-          <span style={{ fontSize:10, color:C.dim, fontFamily:MONO }}>
+          <button
+            onClick={() => { setTab("push"); pushRunRef.current?.(); }}
+            style={{
+              height:24, padding:"0 10px", borderRadius:4,
+              border:`1px solid ${C.border}`,
+              background: tab === "push" ? C.accent : C.s1,
+              color: tab === "push" ? "#0b0d14" : C.mid,
+              fontSize:11, fontWeight:500, cursor:"pointer",
+              display:"flex", alignItems:"center", gap:5,
+              transition:"all .12s",
+            }}
+          >
+            ↑ Push
+          </button>
+          <span style={{ fontSize:10, color:C.dim, fontFamily:MONO, marginLeft:8 }}>
             {c1.name}
           </span>
         </div>
 
+        {/* Loading bar */}
+        <div style={{ height:2, flexShrink:0, background:C.s1, overflow:"hidden" }}>
+          {syncing && (
+            <div style={{
+              height:"100%", background:C.accent,
+              animation:"syncBar 1.4s ease-in-out infinite",
+            }} />
+          )}
+        </div>
+
         {/* Tab content */}
-        <div style={{ flex:1, overflow:"hidden", minHeight:0 }}>
+        <div style={{ flex:1, overflow:"hidden", minHeight:0, position:"relative" }}>
+          {syncing && (
+            <div style={{
+              position:"absolute", inset:0, zIndex:20,
+              background:"rgba(10,11,18,0.55)",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              backdropFilter:"blur(1px)",
+              pointerEvents:"all",
+            }}>
+              <div style={{ fontSize:12, color:C.dim, letterSpacing:"0.1em", textTransform:"uppercase" }}>
+                Syncing device…
+              </div>
+            </div>
+          )}
           <div style={{ display:tab==="builder"?"flex":"none", height:"100%", overflow:"hidden" }}>
             <div style={{ flex:1, overflow:"hidden" }}>
               <MenuBuilder
@@ -611,7 +702,7 @@ export default function App() {
           </div>
 
           <div style={{ display:tab==="devices"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-            <DeviceListPanel devices={cfg.devices} setDevices={setDevices} />
+            <DeviceListPanel devices={cfg.devices} setDevices={setDevices} selectedName={selectedDevice} onSelectName={setSelectedDevice} />
           </div>
 
           <div style={{ display:tab==="settings"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
@@ -619,7 +710,8 @@ export default function App() {
           </div>
 
           <div style={{ display:tab==="push"?"flex":"none", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-            <PushPanel config={cfg} setConfig={setC1Config} />
+            <PushPanel config={cfg} setConfig={setC1Config} runRef={pushRunRef}
+              onPushResult={ok => { blockNextSyncRef.current = !ok; }} />
           </div>
         </div>
 
