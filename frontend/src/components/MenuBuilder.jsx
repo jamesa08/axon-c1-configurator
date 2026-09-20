@@ -1,13 +1,37 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { C, SANS } from "../tokens.js";
-import { ChevronLeft, RefreshCw, Play, ChevronUp, ChevronDown, SlidersHorizontal, FolderOpen } from "lucide-react";
-import { Btn, Tag, FieldRow } from "./Primitives.jsx";
+import { ChevronLeft, ChevronRight, RefreshCw, Play, ChevronUp, ChevronDown, SlidersHorizontal, FolderOpen } from "lucide-react";
+import { Btn, Tag, FieldRow, HR, SectionHead } from "./Primitives.jsx";
 import TreeItem from "./TreeItem.jsx";
 import LevelConfigPanel from "./LevelConfigPanel.jsx";
 import TriggerConfigPanel from "./TriggerConfigPanel.jsx";
 import { mkLevelEntry, mkTriggerEntry, mkMenuEntry, mkStartupSync, mkStartupMacro } from "../defaultData.js";
 import StartupSyncPanel from "./StartupSyncPanel.jsx";
 import StartupMacroPanel from "./StartupMacroPanel.jsx";
+
+function EditableTitle({ value, onChange }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value);
+  const ref = useRef(null);
+  useEffect(() => { setVal(value); }, [value]);
+  const commit = () => { setEditing(false); if (val.trim()) onChange(val.trim().slice(0,16)); else setVal(value); };
+  const sharedStyle = { fontSize:14, fontWeight:600, fontFamily:SANS, lineHeight:"20px", height:20, display:"block" };
+  return (
+    <div style={{ height:20, position:"relative" }}>
+      {editing
+        ? <input ref={ref} autoFocus value={val}
+            onChange={e => setVal(e.target.value.slice(0,16))}
+            onBlur={commit}
+            onKeyDown={e => { if(e.key==="Enter") commit(); if(e.key==="Escape"){ setEditing(false); setVal(value); }}}
+            style={{ ...sharedStyle, color:C.text, background:"transparent", border:"none",
+              borderBottom:`1px solid ${C.accent}`, outline:"none", padding:0, minWidth:60, width:"auto" }} />
+        : <span style={{ ...sharedStyle, color:C.text, cursor:"text" }}
+            onDoubleClick={() => setEditing(true)}
+            title="Double-click to rename">{value}</span>
+      }
+    </div>
+  );
+}
 
 export default function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState, navigate: navigate_ }) {
   const view    = navState?.view ?? "root";
@@ -170,7 +194,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
     }
   }, [currentNode, showRoot]);
 
-  const depthColors  = [C.orange, C.blue, C.green, C.warn];
+  const depthColors  = [C.accent, C.blue, C.green, C.warn];
 
   const simCursorEntry = (!showRoot && entries.length > 0)
     ? entries[simState?.cursorIdx ?? 0] ?? null
@@ -291,16 +315,19 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
       {/* Tree pane */}
       <div style={{ width:320,flexShrink:0,display:"flex",flexDirection:"column",borderRight:`1px solid ${C.border}`,height:"100%",overflow:"hidden" }}>
         {/* Unified toolbar */}
-        <div style={{ display:"flex", alignItems:"center", height:36, borderBottom:`1px solid ${C.border}`,
-          flexShrink:0, gap:0 }}>
+        <div style={{ display:"flex", alignItems:"center", height:36, flexShrink:0, gap:0,
+          background:"linear-gradient(to bottom,#f2f2f6 0%,#e6e6ec 100%)",
+          borderBottom:`1px solid rgba(0,0,0,0.16)`,
+          boxShadow:"inset 0 1px 0 rgba(255,255,255,0.7)",
+        }}>
           <button onClick={navBack} disabled={showRoot} style={{
-            padding:"0 12px", height:"100%", background:C.s2, border:"none",
-            borderRight:`1px solid ${C.border}`,
+            padding:"0 12px", height:"100%", background:"transparent", border:"none",
+            borderRight:`1px solid rgba(0,0,0,0.12)`,
             color:!showRoot?C.text:C.dim, cursor:!showRoot?"pointer":"not-allowed",
             fontFamily:SANS, fontSize:12, fontWeight:500, flexShrink:0,
             display:"flex", alignItems:"center", justifyContent:"center",
           }}><ChevronLeft size={16} /></button>
-          <div style={{ flex:1, padding:"0 12px", background:C.s1, display:"flex",
+          <div style={{ flex:1, padding:"0 12px", background:"transparent", display:"flex",
             alignItems:"center", gap:8, height:"100%", overflow:"hidden" }}>
             {!showRoot && navPath.length === 0 && editingName === "__mainmenu__" ? (
               <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value.slice(0,16))} maxLength={16}
@@ -352,7 +379,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                       else navTo(i-2);
                     }}
                     style={{
-                      width:8, height:8, borderRadius:2, cursor:"pointer",
+                      width:8, height:8, cursor:"pointer",
                       background: isLit ? depthColors[i-1] : C.s3,
                       border:`1px solid ${isLit ? depthColors[i-1] : C.borderHi}`,
                       transition:"background .12s",
@@ -370,8 +397,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               startEdit({stopPropagation:()=>{}}, selected);
             }
           }} style={{
-            padding:"0 12px", height:"100%", background:C.s2, border:"none",
-            borderLeft:`1px solid ${C.border}`,
+            padding:"0 12px", height:"100%", background:"transparent", border:"none",
+            borderLeft:`1px solid rgba(0,0,0,0.12)`,
             color:C.mid, cursor:"pointer", fontFamily:SANS, fontSize:11, flexShrink:0,
           }}>Edit</button>
         </div>
@@ -383,14 +410,13 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
             return (
               <div style={{
                 display:"flex", alignItems:"center", height:34, width:"100%",
-                background: vmSel ? C.orangeDim : "transparent",
-                borderLeft: vmSel ? `3px solid ${C.orange}` : "3px solid transparent",
+                background: vmSel ? C.accentDim : "#ffffff",
                 cursor:"pointer", transition:"background .08s",
                 borderBottom:`1px solid ${C.border}18`,
               }}
                 onClick={()=>config.volMuteEnabled && setSelected(config.volMuteScreen)}
                 onMouseEnter={e=>{ if(!vmSel) e.currentTarget.style.background=C.s2; }}
-                onMouseLeave={e=>{ if(!vmSel) e.currentTarget.style.background="transparent"; }}
+                onMouseLeave={e=>{ if(!vmSel) e.currentTarget.style.background="#ffffff"; }}
               >
                 <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
                   <input type="checkbox" checked={config.volMuteEnabled}
@@ -407,23 +433,21 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     style={{ width:13,height:13,cursor:"pointer" }} />
                 </span>
                 <span style={{ color:C.blue, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><SlidersHorizontal size={11} /></span>
-                <span style={{ flex:1, fontSize:12, color:vmSel?C.orange: config.volMuteEnabled ? C.text : C.dim,
+                <span style={{ flex:1, fontSize:12, color:vmSel?C.accentHi: config.volMuteEnabled ? C.text : C.dim,
                   fontWeight:vmSel?500:400, paddingLeft:6, overflow:"hidden",
                   whiteSpace:"nowrap", textOverflow:"ellipsis" }}>Volume/Mute Screen</span>
-                <span style={{ color:C.blue, paddingRight:8, display:"flex", alignItems:"center" }}><SlidersHorizontal size={10} /></span>
               </div>
             );
           })()}
           {showRoot && (
             <div style={{
               display:"flex", alignItems:"center", height:34, width:"100%",
-              background:"transparent", cursor:"pointer", transition:"background .08s",
-              borderLeft:"3px solid transparent",
+              background:"#f7f7f8", cursor:"pointer", transition:"background .08s",
               borderBottom:`1px solid ${C.border}22`,
             }}
               onClick={e=>{ if(config.menuEnabled) navigate(null); }}
               onMouseEnter={e=>{ e.currentTarget.style.background=C.s2; }}
-              onMouseLeave={e=>{ e.currentTarget.style.background="transparent"; }}
+              onMouseLeave={e=>{ e.currentTarget.style.background="#f7f7f8"; }}
             >
               <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
                 <input type="checkbox" checked={config.menuEnabled}
@@ -441,10 +465,10 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                   }}
                   style={{ width:13,height:13,cursor:"pointer" }} />
               </span>
-              <span style={{ color:C.orange, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><FolderOpen size={11} /></span>
+              <span style={{ color:C.accent, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><FolderOpen size={11} /></span>
               <span style={{ flex:1, fontSize:12, color:config.menuEnabled ? C.text : C.dim, paddingLeft:6,
                 overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>Menu Screen(s)</span>
-              <span style={{ fontSize:9, color:config.menuEnabled ? C.dim : C.border, paddingRight:8 }}>{'>'}</span>
+              <span style={{ color:C.dim, paddingRight:8, display:"flex", alignItems:"center" }}><ChevronRight size={13} /></span>
             </div>
           )}
           {showRoot && (() => {
@@ -454,14 +478,13 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
             return (
               <div style={{
                 display:"flex", alignItems:"center", height:34, width:"100%",
-                background: sel ? `${C.blue}15` : "transparent",
-                borderLeft: sel ? `3px solid ${C.blue}` : "3px solid transparent",
+                background: sel ? `${C.blue}15` : "#ffffff",
                 cursor:"pointer", transition:"background .08s",
                 borderBottom:`1px solid ${C.border}18`,
               }}
                 onClick={() => setSelected({ id:"__startupSync__", entry_type:"_startup_sync", ...sync })}
                 onMouseEnter={e=>{ if(!sel) e.currentTarget.style.background=C.s2; }}
-                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="transparent"; }}
+                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="#ffffff"; }}
               >
                 <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
                   <input type="checkbox" checked={syncEnabled}
@@ -481,7 +504,6 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                   overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
                   Startup Synchronization
                 </span>
-                <span style={{ fontSize:9, color:C.dim, paddingRight:8, fontFamily:"monospace" }}>sync</span>
               </div>
             );
           })()}
@@ -492,14 +514,13 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
             return (
               <div style={{
                 display:"flex", alignItems:"center", height:34, width:"100%",
-                background: sel ? `${C.blue}15` : "transparent",
-                borderLeft: sel ? `3px solid ${C.blue}` : "3px solid transparent",
+                background: sel ? `${C.blue}15` : "#f7f7f8",
                 cursor:"pointer", transition:"background .08s",
                 borderBottom:`1px solid ${C.border}18`,
               }}
                 onClick={() => setSelected({ id:"__startupMacro__", entry_type:"_startup_macro", ...macro })}
                 onMouseEnter={e=>{ if(!sel) e.currentTarget.style.background=C.s2; }}
-                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="transparent"; }}
+                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="#f7f7f8"; }}
               >
                 <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
                   <input type="checkbox" checked={macroEnabled}
@@ -519,9 +540,6 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                   overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
                   Initialization Macro
                 </span>
-                <span style={{ fontSize:9, color:C.dim, paddingRight:8, fontFamily:"monospace" }}>
-                  {(config.startupMacro?.actions?.length ?? 0)} actions
-                </span>
               </div>
             );
           })()}
@@ -536,10 +554,12 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               onDragLeave={()=> setDragOver(null)}
               onDrop={e      => { e.preventDefault(); setDragOver(null); if(dragSrc.current) reorder(dragSrc.current, entry.id); dragSrc.current=null; }}
               onDragEnd={()  => { setDragOver(null); dragSrc.current=null; }}
+              onMouseEnter={e=>{ if(!isSelected) e.currentTarget.style.background=C.s2; }}
+              onMouseLeave={e=>{ if(!isSelected) e.currentTarget.style.background=isSelected?C.accentDim:i%2===0?"#ffffff":"#f7f7f8"; }}
               style={{
                 borderBottom:`1px solid ${C.border}11`,
                 borderTop: isDropTarget ? `2px solid ${C.accent}` : "2px solid transparent",
-                background: isSelected ? `${C.orange}18` : "transparent",
+                background: isSelected ? C.accentDim : i%2===0 ? "#ffffff" : "#f7f7f8",
                 transition:"background .07s",
               }}>
               {editingName===entry.id ? (
@@ -556,7 +576,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     gap:2, alignItems:"center", paddingLeft:4, cursor:"grab", opacity:.35 }}
                     onMouseDown={e=>e.stopPropagation()}>
                     {[0,1].map(r=><div key={r} style={{ display:"flex",gap:1.5 }}>
-                      {[0,1].map(c=><div key={c} style={{ width:2,height:2,borderRadius:1,background:C.mid }}/>)}
+                      {[0,1].map(c=><div key={c} style={{ width:2,height:2,background:C.mid }}/>)}
                     </div>)}
                   </div>
                   <TreeItem entry={entry} index={i} selected={effectiveSelected}
@@ -595,11 +615,11 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
           const canAddMacro   = !showRoot && nodeType === "menu" && currentDepth < 4;
 
           const limitTag = atLimit ? (
-            <span style={{ fontSize:10, color:C.warn, fontFamily:"monospace" }}>
+            <span style={{ fontSize:11, color:C.warn }}>
               {count}/{limit} max
             </span>
           ) : count > 0 ? (
-            <span style={{ fontSize:10, color:C.dim, fontFamily:"monospace" }}>
+            <span style={{ fontSize:11, color:C.dim }}>
               {count}/{limit}
             </span>
           ) : null;
@@ -611,32 +631,40 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                 padding:"4px 12px", borderBottom:`1px solid ${C.border}`,
                 display:"flex", alignItems:"center", gap:6,
               }}>
-                <span style={{ fontSize:10, color:C.dim, flex:1 }}>Menu IDs</span>
+                <span style={{ fontSize:11, color:C.dim, flex:1 }}>Menu IDs</span>
                 <span style={{
-                  fontSize:10, fontFamily:"monospace",
+                  fontSize:11,
                   color: idWarning ? C.warn : idCaution ? C.orange : C.dim,
                   fontWeight: idCaution ? 600 : 400,
                 }}>
                   {totalMenuIds}/{ID_MAX}
                 </span>
                 {idWarning && (
-                  <span style={{ fontSize:9, color:C.warn, fontWeight:600 }}>LIMIT</span>
+                  <span style={{ fontSize:11, color:C.warn, fontWeight:600 }}>LIMIT</span>
                 )}
                 <div style={{
-                  width:60, height:4, borderRadius:2,
-                  background:C.s3, overflow:"hidden",
+                  width:60, height:6, borderRadius:100,
+                  background:"linear-gradient(to bottom,#eee,#fff)",
+                  border:"1px solid #ccc",
+                  boxShadow:"inset 0 1px 2px #0002",
+                  overflow:"hidden", position:"relative",
                 }}>
                   <div style={{
+                    position:"absolute", top:0, left:0, bottom:0,
                     width:`${Math.min(100, (totalMenuIds/ID_MAX)*100)}%`,
-                    height:"100%", borderRadius:2,
-                    background: idWarning ? C.warn : idCaution ? C.orange : C.sage,
+                    background: idWarning
+                      ? "linear-gradient(to bottom,#f88 10%,#fff2 20%,#f88 30%,#faa)"
+                      : idCaution
+                      ? "linear-gradient(to bottom,#fb8 10%,#fff2 20%,#fb8 30%,#fca)"
+                      : "linear-gradient(to bottom,#6af 10%,#fff2 20%,#6af 30%,#9ef)",
+                    borderRadius:100,
                     transition:"width .2s",
                   }} />
                 </div>
               </div>
               <div style={{ padding:"8px 12px 6px", borderBottom:`1px solid ${C.border}` }}>
-                <div style={{ fontSize:10, color:C.dim, letterSpacing:"0.08em",
-                  textTransform:"uppercase", marginBottom:6 }}>Containers</div>
+                <div style={{ fontSize:11, color:C.dim, letterSpacing:"0.04em",
+                  marginBottom:6 }}>Containers</div>
                 <div style={{ display:"flex", gap:4 }}>
                   <Btn small onClick={()=>addItem("menu")}
                     disabled={!canAddMenu || atLimit} style={{ flex:1 }}>
@@ -654,8 +682,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               </div>
               <div style={{ padding:"8px 12px 6px", borderBottom:`1px solid ${C.border}` }}>
                 <div style={{ display:"flex", alignItems:"center", marginBottom:6 }}>
-                  <span style={{ fontSize:10, color:C.dim, letterSpacing:"0.08em",
-                    textTransform:"uppercase", flex:1 }}>Actions</span>
+                  <span style={{ fontSize:11, color:C.dim, letterSpacing:"0.04em",
+                    flex:1 }}>Actions</span>
                   {limitTag}
                 </div>
                 <div style={{ display:"flex", gap:4 }}>
@@ -675,7 +703,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               </div>
               {!showRoot && (nodeType === "menu" || nodeType === "list" || nodeType === "macro") && (
                 <div style={{ padding:"6px 12px 8px", display:"flex", gap:4, alignItems:"center", flexWrap:"wrap" }}>
-                  <span style={{ fontSize:10, color:C.dim, marginRight:2, flexShrink:0 }}>Fill:</span>
+                  <span style={{ fontSize:11, color:C.dim, marginRight:2, flexShrink:0 }}>Fill:</span>
                   {nodeType === "menu" && (
                     <>
                       <Btn small variant="ghost"
@@ -712,7 +740,30 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
       </div>
 
       {/* Config panel */}
-      <div style={{ flex:1,padding:"14px 16px",overflowY:"auto",height:"100%" }}>
+      <div style={{ flex:1,padding:"14px 16px",overflowY:"auto",height:"100%",position:"relative",background:C.s1stripe }}>
+        {selected && (() => {
+          const typeLabel =
+            selected.entry_type === "level" ? "level" :
+            selected.entry_type === "action" ? "trigger" :
+            selected.entry_type === "menu" ? "menu" :
+            selected.entry_type === "_startup_sync" ? "sync" :
+            selected.entry_type === "_startup_macro" ? "macro" :
+            selected.id === config.volMuteScreen?.id ? "level" : null;
+          return typeLabel ? (
+            <div style={{
+              position:"absolute", right:8, top:8,
+              pointerEvents:"none", overflow:"hidden",
+              lineHeight:1, zIndex:0,
+            }}>
+              <span style={{
+                fontSize:90, fontWeight:100, fontStyle:"italic",
+                color:C.border, opacity:0.5, lineHeight:1,
+                userSelect:"none", whiteSpace:"nowrap", display:"block", height:100,
+              }}>{typeLabel}</span>
+            </div>
+          ) : null;
+        })()}
+        <div style={{ position:"relative", zIndex:1 }}>
         {!selected && (
           <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:C.dim,fontSize:12 }}>
             Select an item to configure it.
@@ -720,52 +771,35 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
         )}
         {selected?.entry_type==="level" && selected?.id!==config.volMuteScreen.id && (
           <>
-            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:14 }}>
-              <span style={{ fontSize:14,fontWeight:600,color:C.text }}>{selected.display_txt}</span>
-              <Tag color="blue">Level</Tag>
-              <div style={{ marginLeft:"auto" }}>
-                <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
-                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
-              </div>
+            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:22 }}>
+              <EditableTitle value={selected.display_txt} onChange={v=>updateEntry({...selected,display_txt:v})} />
             </div>
             <LevelConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
           </>
         )}
         {selected?.entry_type==="action" && (
           <>
-            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:14 }}>
-              <span style={{ fontSize:14,fontWeight:600,color:C.text }}>{selected.display_txt}</span>
-              <Tag color="green">Trigger</Tag>
-              <div style={{ marginLeft:"auto" }}>
-                <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
-                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
-              </div>
+            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:22 }}>
+              <EditableTitle value={selected.display_txt} onChange={v=>updateEntry({...selected,display_txt:v})} />
             </div>
             <TriggerConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
           </>
         )}
         {selected?.entry_type==="menu" && (
           <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:4 }}>
-              <span style={{ fontSize:14,fontWeight:600 }}>{selected.display_txt}</span>
-              <Tag color="orange">Menu container</Tag>
+            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:34 }}>
+              <EditableTitle value={selected.display_txt} onChange={v=>updateEntry({...selected,display_txt:v})} />
             </div>
-            <FieldRow label="Name">
-              <input value={selected.display_txt} onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})} maxLength={16} style={{ maxWidth:220 }} />
-            </FieldRow>
-            <FieldRow label="Children"><Tag color="dim">{selected.entries?.length||0} items</Tag></FieldRow>
-            <div style={{ marginTop:8 }}>
-              <Btn onClick={()=>navigate(selected)}>Open in builder</Btn>
-            </div>
+            <SectionHead />
+            <FieldRow label="Children" style={{ alignItems:"baseline" }}><span style={{ fontSize:12, color:C.dim }}>{selected.entries?.length||0} items</span></FieldRow>
+            <HR />
+            <Btn onClick={()=>navigate(selected)}>Open in builder</Btn>
           </div>
         )}
         {selected?.entry_type==="_startup_sync" && (
           <>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:22 }}>
               <span style={{ fontSize:14, fontWeight:600, color:C.text }}>Startup Synchronization</span>
-              <Tag color="blue">Sync</Tag>
             </div>
             <StartupSyncPanel
               sync={config.startupSync ?? { ...selected }}
@@ -776,9 +810,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
         )}
         {selected?.entry_type==="_startup_macro" && (
           <>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:22 }}>
               <span style={{ fontSize:14, fontWeight:600, color:C.text }}>Initialization Macro</span>
-              <Tag color="blue">Macro</Tag>
             </div>
             <StartupMacroPanel
               macro={config.startupMacro ?? { ...selected }}
@@ -789,18 +822,13 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
         )}
         {selected?.id===config.volMuteScreen.id && (
           <>
-            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:14 }}>
-              <span style={{ fontSize:14,fontWeight:600 }}>Vol/Mute Screen</span>
-              <Tag color="blue">Root level</Tag>
-              <div style={{ marginLeft:"auto" }}>
-                <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
-                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
-              </div>
+            <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:22 }}>
+              <EditableTitle value={selected.display_txt} onChange={v=>updateEntry({...selected,display_txt:v})} />
             </div>
             <LevelConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
           </>
         )}
+        </div>
       </div>
     </div>
   );
