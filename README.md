@@ -2,8 +2,10 @@
 
 Web-based configurator for the Attero Tech Axon C1 (by QSC / Attero Tech), built from complete reverse engineering of the UDP control protocol and the `AxonC1_plugin.dll`.
 
-![Home screen](docs/screenshots/home.webp)
-![Menu builder](docs/screenshots/level-config.webp)
+<table><tr>
+<td><img src="docs/screenshots/home.webp"/></td>
+<td><img src="docs/screenshots/level-config.webp"/></td>
+</tr></table>
 
 ## Architecture
 
