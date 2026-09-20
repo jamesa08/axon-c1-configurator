@@ -4,6 +4,8 @@ from pathlib import Path
 
 block_cipher = None
 
+_icon = "AppIcon.icns" if sys.platform == "darwin" else "AppIcon.ico"
+
 # Resolve async_timeout location at build time
 _at_spec = importlib.util.find_spec("async_timeout")
 _at_path = str(Path(_at_spec.origin).parent) if _at_spec and _at_spec.origin else None
@@ -69,7 +71,7 @@ exe = EXE(
     target_arch="universal2",
     codesign_identity=None,
     entitlements_file=None,
-    icon="AppIcon.icns",
+    icon=_icon,
 )
 
 coll = COLLECT(
@@ -88,7 +90,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="Axon C1 Configurator.app",
-        icon="AppIcon.icns",
+        icon=_icon,
         bundle_identifier="com.jamesa08.axon-c1-configurator",
         info_plist={
             "NSHighResolutionCapable": True,
