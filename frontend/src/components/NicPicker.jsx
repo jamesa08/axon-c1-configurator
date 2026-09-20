@@ -31,8 +31,8 @@ export default function NicPicker({ value, onChange, compact = false }) {
           setLoading(true);
           fetch("/api/interfaces").then(r=>r.json()).then(list=>{setNics(list);setLoading(false);}).catch(()=>setLoading(false));
         }}
-        style={{ fontSize:10, padding:"2px 6px", cursor:"pointer" }}
-      >&#8635;</button>
+        style={{ padding:"0 8px", height:28, borderRadius:4, border:`1px solid ${C.borderHi}`, background:C.s0, color:C.mid, fontSize:13, cursor:"pointer", flexShrink:0 }}
+      >↺</button>
     </div>
   );
 }

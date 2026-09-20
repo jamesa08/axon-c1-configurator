@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { C, MONO, SANS } from "../tokens.js";
+import { ChevronUp, ChevronDown, X } from "lucide-react";
 import { bytesToStr, uid } from "../helpers.js";
 import { Btn, FieldRow, HR } from "./Primitives.jsx";
 import { mkMacroAction } from "../defaultData.js";
@@ -26,13 +27,13 @@ function ActionRow({ action, index, devices, onUpdate, onDelete, onMove, total }
         </span>
         <div style={{ display:"flex", gap:2 }}>
           <button onClick={e=>{e.stopPropagation(); onMove(index,-1);}} disabled={index===0}
-            style={{ background:C.s2, border:`1px solid ${C.border}`, color:C.dim, width:18, height:18, borderRadius:2, fontSize:10, cursor:"pointer" }}>^</button>
+            style={{ background:C.s2, border:`1px solid ${C.border}`, color:C.dim, width:18, height:18, borderRadius:2, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={11} /></button>
           <button onClick={e=>{e.stopPropagation(); onMove(index,1);}} disabled={index===total-1}
-            style={{ background:C.s2, border:`1px solid ${C.border}`, color:C.dim, width:18, height:18, borderRadius:2, fontSize:10, cursor:"pointer" }}>v</button>
+            style={{ background:C.s2, border:`1px solid ${C.border}`, color:C.dim, width:18, height:18, borderRadius:2, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronDown size={11} /></button>
           <button onClick={e=>{e.stopPropagation(); onDelete(action.id);}}
-            style={{ background:C.dangerDim, border:`1px solid rgba(224,85,85,0.3)`, color:C.danger, width:18, height:18, borderRadius:2, fontSize:10, cursor:"pointer" }}>×</button>
+            style={{ background:C.dangerDim, border:`1px solid rgba(224,85,85,0.3)`, color:C.danger, width:18, height:18, borderRadius:2, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><X size={11} /></button>
         </div>
-        <span style={{ fontSize:10, color:C.dim }}>{expanded ? "▲" : "▼"}</span>
+        <span style={{ color:C.dim, display:"flex", alignItems:"center" }}>{expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
       </div>
 
       {/* Expanded detail */}

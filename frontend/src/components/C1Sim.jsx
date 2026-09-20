@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { C, MONO } from "../tokens.js";
+import { Zap } from "lucide-react";
 import { addLog } from "../helpers.js";
 
 export default function C1Sim({ config, simNavPath, simState, onSimStateChange, onBuilderNav, setConfig }) {
@@ -267,7 +268,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
                     {showUp    && <span style={{ fontSize:8, flexShrink:0 }}>^</span>}
                     {showDown  && <span style={{ fontSize:8, flexShrink:0 }}>v</span>}
                     {!showUp && !showDown && isMenuType && <span style={{ fontSize:7, flexShrink:0 }}>{'>'}</span>}
-                    {!showUp && !showDown && isAction   && <span style={{ fontSize:7, flexShrink:0 }}>!</span>}
+                    {!showUp && !showDown && isAction   && <Zap size={8} style={{ flexShrink:0 }} />}
                   </>
                 ) : null}
               </div>

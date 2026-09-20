@@ -2,6 +2,7 @@ import React from "react";
 import { C, MONO } from "../tokens.js";
 import { mkDevice } from "../defaultData.js";
 import { Btn, FieldRow } from "./Primitives.jsx";
+import { Plus } from "lucide-react";
 
 export default function DeviceListPanel({ devices, setDevices, selectedName, onSelectName }) {
   const selId = devices.find(d => d.name === selectedName)?.id ?? null;
@@ -22,7 +23,7 @@ export default function DeviceListPanel({ devices, setDevices, selectedName, onS
           const d = mkDevice("New Device", "10.0.0.1");
           setDevices(ds => [...ds, d]);
           if (onSelectName) onSelectName(d.name);
-        }} title="Max 3 devices">+</Btn>
+        }} title="Max 3 devices"><Plus size={12} /></Btn>
       </div>
       <div style={{ flex:1, overflowY:"auto" }}>
         {devices.length === 0 && (

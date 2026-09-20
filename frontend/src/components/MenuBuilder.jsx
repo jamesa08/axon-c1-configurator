@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { C, SANS } from "../tokens.js";
+import { ChevronLeft, RefreshCw, Play, ChevronUp, ChevronDown, SlidersHorizontal, FolderOpen } from "lucide-react";
 import { Btn, Tag, FieldRow } from "./Primitives.jsx";
 import TreeItem from "./TreeItem.jsx";
 import LevelConfigPanel from "./LevelConfigPanel.jsx";
@@ -297,7 +298,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
             borderRight:`1px solid ${C.border}`,
             color:!showRoot?C.text:C.dim, cursor:!showRoot?"pointer":"not-allowed",
             fontFamily:SANS, fontSize:12, fontWeight:500, flexShrink:0,
-          }}>&#8249;</button>
+            display:"flex", alignItems:"center", justifyContent:"center",
+          }}><ChevronLeft size={16} /></button>
           <div style={{ flex:1, padding:"0 12px", background:C.s1, display:"flex",
             alignItems:"center", gap:8, height:"100%", overflow:"hidden" }}>
             {!showRoot && navPath.length === 0 && editingName === "__mainmenu__" ? (
@@ -404,11 +406,11 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     }}
                     style={{ width:13,height:13,cursor:"pointer" }} />
                 </span>
-                <span style={{ fontSize:9, color:C.blue, minWidth:18, textAlign:"center" }}>||</span>
+                <span style={{ color:C.blue, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><SlidersHorizontal size={11} /></span>
                 <span style={{ flex:1, fontSize:12, color:vmSel?C.orange: config.volMuteEnabled ? C.text : C.dim,
                   fontWeight:vmSel?500:400, paddingLeft:6, overflow:"hidden",
                   whiteSpace:"nowrap", textOverflow:"ellipsis" }}>Volume/Mute Screen</span>
-                <span style={{ fontSize:9, color:C.blue, paddingRight:8 }}>||</span>
+                <span style={{ color:C.blue, paddingRight:8, display:"flex", alignItems:"center" }}><SlidersHorizontal size={10} /></span>
               </div>
             );
           })()}
@@ -439,7 +441,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                   }}
                   style={{ width:13,height:13,cursor:"pointer" }} />
               </span>
-              <span style={{ fontSize:9, color:C.orange, minWidth:18, textAlign:"center" }}>{'>'}</span>
+              <span style={{ color:C.orange, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><FolderOpen size={11} /></span>
               <span style={{ flex:1, fontSize:12, color:config.menuEnabled ? C.text : C.dim, paddingLeft:6,
                 overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>Menu Screen(s)</span>
               <span style={{ fontSize:9, color:config.menuEnabled ? C.dim : C.border, paddingRight:8 }}>{'>'}</span>
@@ -474,7 +476,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     }}
                     style={{ width:13, height:13, cursor:"pointer" }} />
                 </span>
-                <span style={{ fontSize:11, color:C.blue, minWidth:18, textAlign:"center" }}>&#8635;</span>
+                <span style={{ color:C.blue, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><RefreshCw size={11} /></span>
                 <span style={{ flex:1, fontSize:12, color:syncEnabled ? C.text : C.dim, paddingLeft:6,
                   overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
                   Startup Synchronization
@@ -512,7 +514,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     }}
                     style={{ width:13, height:13, cursor:"pointer" }} />
                 </span>
-                <span style={{ fontSize:11, color:C.blue, minWidth:18, textAlign:"center" }}>&#9654;</span>
+                <span style={{ color:C.blue, minWidth:18, display:"flex", alignItems:"center", justifyContent:"center" }}><Play size={11} /></span>
                 <span style={{ flex:1, fontSize:12, color:macroEnabled ? C.text : C.dim, paddingLeft:6,
                   overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
                   Initialization Macro
@@ -562,8 +564,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                     onNavigate={navigate} />
                   {effectiveSelected?.id===entry.id && selectedIds.size <= 1 && (
                     <div style={{ position:"absolute",right:28,display:"flex",gap:2 }}>
-                      <button onClick={e=>{e.stopPropagation();move(entry.id,-1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>^</button>
-                      <button onClick={e=>{e.stopPropagation();move(entry.id, 1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,fontSize:10,cursor:"pointer" }}>v</button>
+                      <button onClick={e=>{e.stopPropagation();move(entry.id,-1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><ChevronUp size={11} /></button>
+                      <button onClick={e=>{e.stopPropagation();move(entry.id, 1);}} style={{ background:C.s3,border:"none",color:C.mid,width:18,height:18,borderRadius:2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><ChevronDown size={11} /></button>
                     </div>
                   )}
                 </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { LayoutGrid, Settings, Upload, RefreshCw, Plus, ChevronLeft, ChevronRight, ArrowUp, Loader, ChevronUp, ChevronDown } from "lucide-react";
 import { C, MONO, SANS, G } from "./tokens.js";
 import { addLog } from "./helpers.js";
 import { mkDefaultConfig, mkDevice } from "./defaultData.js";
@@ -501,11 +502,15 @@ export default function App() {
                 height:28, borderRadius:4, border:`1px solid ${C.borderHi}`,
                 background:C.s1, color:scanning?C.accent:C.mid, fontFamily:SANS, fontSize:12,
                 cursor:scanning?"not-allowed":"pointer",
-              }}>{scanning ? "Scanning..." : "&#8981;  Scan network"}</button>
+              }} style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                {scanning ? <Loader size={12} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
+                {scanning ? "Scanning..." : "Scan network"}
+              </button>
               <button onClick={()=>{ const ip=prompt("Enter device IP:"); if(ip?.trim()) addC1(ip.trim()); }} style={{
                 height:28, borderRadius:4, border:`1px solid ${C.border}`,
                 background:C.s1, color:C.dim, fontFamily:SANS, fontSize:12, cursor:"pointer",
-              }}>+  Add by IP</button>
+                display:"flex", alignItems:"center", justifyContent:"center", gap:6,
+              }}><Plus size={12} />  Add by IP</button>
             </div>
           </div>
           <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:12 }}>
@@ -530,9 +535,9 @@ export default function App() {
 
         <div style={{ flex:1, overflowY:"auto", padding:"6px 0" }}>
           <SbSection>Configure</SbSection>
-          <SbNavRow icon="&#8862;" label="Menu builder"        active={tab==="builder"}  onClick={()=>setTab("builder")} />
-          <SbNavRow icon="&#9881;" label="Device settings"     active={tab==="settings"} onClick={()=>setTab("settings")} />
-          <SbNavRow icon="&#8593;" label="Push to device"      active={tab==="push"}     onClick={()=>setTab("push")} />
+          <SbNavRow icon={<LayoutGrid size={14} />} label="Menu builder"        active={tab==="builder"}  onClick={()=>setTab("builder")} />
+          <SbNavRow icon={<Settings size={14} />}    label="Device settings"     active={tab==="settings"} onClick={()=>setTab("settings")} />
+          <SbNavRow icon={<Upload size={14} />}      label="Push to device"      active={tab==="push"}     onClick={()=>setTab("push")} />
 
           <SbSection>3rd party devices</SbSection>
           {cfg.devices.map(d => (
@@ -559,7 +564,7 @@ export default function App() {
               display:"flex", alignItems:"center", justifyContent:"center", gap:5,
               transition:"all .12s",
             }}>
-              <span style={{ fontSize:10 }}>{scanning ? "⏳" : "⟳"}</span>
+              {scanning ? <Loader size={11} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={11} />}
               {scanning ? "Scanning..." : "Scan network"}
             </button>
             <button onClick={() => {
@@ -569,7 +574,7 @@ export default function App() {
               width:24, height:24, borderRadius:4, border:`1px solid ${C.border}`,
               background:C.s1, color:C.mid, fontFamily:SANS, fontSize:14,
               cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
-            }} title="Add by IP">+</button>
+            }} title="Add by IP"><Plus size={12} /></button>
           </div>
 
           <div style={{ padding:"2px 14px 6px" }}>
@@ -609,12 +614,12 @@ export default function App() {
               {navState.path.length > 0 && (
                 <button onClick={()=>navigate({ type:"POP" })} style={{
                   background:"transparent", border:"none", color:C.dim,
-                  cursor:"pointer", fontFamily:SANS, fontSize:12, padding:"0 4px 0 0",
-                }}>&#8249;</button>
+                  cursor:"pointer", padding:"0 4px 0 0", display:"flex", alignItems:"center",
+                }}><ChevronLeft size={14} /></button>
               )}
               {breadcrumb.map((b, i) => (
                 <span key={i} style={{ display:"flex", alignItems:"center", gap:6 }}>
-                  {i > 0 && <span style={{ fontSize:11, color:C.dim }}>&#8250;</span>}
+                  {i > 0 && <ChevronRight size={12} style={{ color:C.dim }} />}
                   <span style={{
                     fontSize:11, cursor: i < breadcrumb.length-1 ? "pointer" : "default",
                     color: i === breadcrumb.length-1 ? C.text : C.dim,
@@ -649,7 +654,7 @@ export default function App() {
               transition:"all .12s",
             }}
           >
-            ↑ Push
+            <ArrowUp size={11} /> Push
           </button>
           <span style={{ fontSize:10, color:C.dim, fontFamily:MONO, marginLeft:8 }}>
             {c1.name}
@@ -760,8 +765,8 @@ export default function App() {
                 <span style={{ fontSize:10, fontWeight:500, color:C.dim, fontFamily:MONO, flex:1 }}>console</span>
                 <span
                   onClick={e => { e.stopPropagation(); setConsoleH(h => h <= 32 ? 180 : 32); }}
-                  style={{ fontSize:9, color:C.dim, padding:"0 14px", cursor:"pointer", lineHeight:"32px" }}
-                >{collapsed ? "[+]" : "[-]"}</span>
+                  style={{ color:C.dim, padding:"0 14px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}
+                >{collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
               </div>
               {!collapsed && (
                 <div style={{ flex:1, overflow:"hidden", minHeight:0 }}>

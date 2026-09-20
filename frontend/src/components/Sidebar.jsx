@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { C, MONO, SANS } from "../tokens.js";
+import { LayoutGrid, Settings, Upload, Box, Plus, Smartphone } from "lucide-react";
 
 export function SbSection({ children }) {
   return (
@@ -25,7 +26,7 @@ export function SbNavRow({ icon, label, active, onClick }) {
         background: active ? C.accent : hov ? C.s2 : "transparent",
         transition:"background .1s",
       }}>
-      <span style={{ fontSize:15, color: active ? "#0b0d14" : C.mid, width:18, textAlign:"center", flexShrink:0 }}>{icon}</span>
+      <span style={{ color: active ? "#0b0d14" : C.mid, width:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{icon}</span>
       <span style={{ fontSize:12, color: active ? "#0b0d14" : C.mid, flex:1 }}>{label}</span>
     </div>
   );
@@ -45,7 +46,7 @@ export function SbDeviceRow({ device, active, onClick }) {
         background: active ? C.accent : hov ? C.s2 : "transparent",
         transition:"background .1s",
       }}>
-      <span style={{ fontSize:14, color: active ? "#0b0d14" : C.dim, width:18, textAlign:"center", flexShrink:0 }}>&#11041;</span>
+      <span style={{ color: active ? "#0b0d14" : C.dim, width:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><Box size={13} /></span>
       <div style={{ flex:1, overflow:"hidden" }}>
         <div style={{ fontSize:11, fontWeight:500, color: active ? "#0b0d14" : C.mid,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{device.name}</div>
@@ -76,18 +77,9 @@ export function SbUnitRow({ unit, active, onClick }) {
         background: active ? C.accent : hov ? C.s2 : "transparent",
         transition:"background .1s",
       }}>
-      <div style={{
-        width:18, height:18, borderRadius:3, flexShrink:0,
-        background: active ? "rgba(0,0,0,.15)" : C.s2,
-        border: `1px solid ${active ? "rgba(0,0,0,.2)" : C.border}`,
-        display:"flex", alignItems:"center", justifyContent:"center",
-      }}>
-        <div style={{
-          width:8, height:8, borderRadius:1,
-          background: active ? "#0b0d14" : C.mid,
-          opacity: active ? 0.7 : 0.5,
-        }} />
-      </div>
+      <span style={{ color: active ? "#0b0d14" : C.mid, width:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+        <Smartphone size={13} />
+      </span>
       <div style={{ flex:1, overflow:"hidden" }}>
         <div style={{ fontSize:11, fontWeight:500, color: active ? "#0b0d14" : C.mid,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{unit.name}</div>
@@ -119,7 +111,7 @@ export function SbAddRow({ label, onClick }) {
         cursor:"pointer", userSelect:"none", opacity: hov ? 1 : 0.5,
         transition:"opacity .1s",
       }}>
-      <span style={{ fontSize:13, color:C.dim, width:18, textAlign:"center", flexShrink:0 }}>+</span>
+      <span style={{ color:C.dim, width:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><Plus size={13} /></span>
       <span style={{ fontSize:11, color:C.dim }}>{label}</span>
     </div>
   );

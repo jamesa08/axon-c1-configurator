@@ -1,5 +1,6 @@
 import React from "react";
 import { C, MONO } from "../tokens.js";
+import { FolderOpen, SlidersHorizontal, Zap } from "lucide-react";
 
 export default function TreeItem({ entry, depth=0, selected, onSelect, onNavigate, index }) {
   const isMenu    = entry.entry_type === "menu";
@@ -7,7 +8,7 @@ export default function TreeItem({ entry, depth=0, selected, onSelect, onNavigat
   const isAction  = entry.entry_type === "action";
   const isSelected = selected?.id === entry.id;
 
-  const icon = isMenu ? ">" : isLevel ? "||" : "!";
+  const icon = isMenu ? <FolderOpen size={11} /> : isLevel ? <SlidersHorizontal size={11} /> : <Zap size={11} />;
   const iconColor = isMenu ? C.orange : isLevel ? C.blue : C.green;
 
   return (
@@ -27,15 +28,15 @@ export default function TreeItem({ entry, depth=0, selected, onSelect, onNavigat
     >
       <span style={{ fontSize:10, color:C.dim, minWidth:32, paddingLeft:10,
         fontFamily:MONO, flexShrink:0, textAlign:"right", paddingRight:6 }}>{index+1}</span>
-      <span style={{ fontSize:9, color:iconColor, minWidth:18, flexShrink:0, textAlign:"center" }}>{icon}</span>
+      <span style={{ color:iconColor, minWidth:18, flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>{icon}</span>
       <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
         fontSize:12, color:isSelected?C.orange:C.text, fontWeight:isSelected?500:400,
         paddingLeft:6 }}>
         {entry.display_txt}
       </span>
-      {isMenu   && <span style={{ fontSize:9,  color:isSelected?C.orange:C.dim, flexShrink:0 }}>{'>'}</span>}
-      {isLevel  && <span style={{ fontSize:8,  color:C.blue,  flexShrink:0 }}>||</span>}
-      {isAction && <span style={{ fontSize:9,  color:C.green, flexShrink:0 }}>!</span>}
+      {isMenu   && <span style={{ color:isSelected?C.orange:C.dim, flexShrink:0, display:"flex", alignItems:"center", paddingRight:4 }}><FolderOpen size={10} /></span>}
+      {isLevel  && <span style={{ color:C.blue,  flexShrink:0, display:"flex", alignItems:"center", paddingRight:4 }}><SlidersHorizontal size={10} /></span>}
+      {isAction && <span style={{ color:C.green, flexShrink:0, display:"flex", alignItems:"center", paddingRight:4 }}><Zap size={10} /></span>}
     </div>
   );
 }
