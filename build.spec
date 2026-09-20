@@ -10,6 +10,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("frontend/dist", "frontend/dist"),
+        ("/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/async_timeout", "async_timeout"),
     ],
     hiddenimports=[
         "webview",
@@ -33,6 +34,7 @@ a = Analysis(
         "yarl",
         "attr",
         "attrs",
+        "async_timeout",
     ],
     hookspath=[],
     hooksconfig={},
@@ -59,10 +61,10 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch="universal2",
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon="AppIcon.icns",
 )
 
 coll = COLLECT(
@@ -81,7 +83,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="Axon C1 Configurator.app",
-        icon=None,
+        icon="AppIcon.icns",
         bundle_identifier="com.jamesa08.axon-c1-configurator",
         info_plist={
             "NSHighResolutionCapable": True,
