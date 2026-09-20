@@ -8,6 +8,7 @@ import TriggerConfigPanel from "./TriggerConfigPanel.jsx";
 import { mkLevelEntry, mkTriggerEntry, mkMenuEntry, mkStartupSync, mkStartupMacro } from "../defaultData.js";
 import StartupSyncPanel from "./StartupSyncPanel.jsx";
 import StartupMacroPanel from "./StartupMacroPanel.jsx";
+import AxonLogo from "./AxonLogo.jsx";
 
 function EditableTitle({ value, onChange }) {
   const [editing, setEditing] = useState(false);
@@ -740,7 +741,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
       </div>
 
       {/* Config panel */}
-      <div style={{ flex:1,padding:"14px 16px",overflowY:"auto",height:"100%",position:"relative",background:C.s1stripe }}>
+      <div style={{ flex:1,height:"100%",position:"relative",overflow:"hidden",background:C.s1stripe }}>
+      <div style={{ position:"absolute",inset:0,padding:"14px 16px",overflowY:"auto" }}>
         {selected && (() => {
           const typeLabel =
             selected.entry_type === "level" ? "level" :
@@ -829,6 +831,13 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
           </>
         )}
         </div>
+      </div>
+        {!selected && (
+          <div style={{ position:"absolute", bottom:0, right:-33, opacity:0.3, pointerEvents:"none", display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
+            <AxonLogo scale={5} muted />
+            <div style={{ fontSize:32, fontWeight:300, color:C.border, fontFamily:SANS, letterSpacing:"0.02em", lineHeight:1, marginTop:6, alignSelf:"flex-end", paddingRight:40 }}>configurator</div>
+          </div>
+        )}
       </div>
     </div>
   );
