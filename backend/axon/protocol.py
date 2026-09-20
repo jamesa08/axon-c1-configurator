@@ -39,14 +39,6 @@ async def broadcast_all(payload: dict):
             except Exception:
                 dead.add(ws)
         ip_clients -= dead
-    # Also broadcast to the global "_discovery" room
-    dead = set()
-    for ws in ws_clients.get("_discovery", set()):
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.add(ws)
-    ws_clients["_discovery"] -= dead
 
 
 # ---------------------------------------------------------------------------
