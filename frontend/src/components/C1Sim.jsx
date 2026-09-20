@@ -213,15 +213,15 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
           </div>
           <div style={{ height:1, background:C.lcd, flexShrink:0, margin:"1px 0" }} />
           <div style={{ color:C.lcd, textAlign:"center", fontSize:10, fontFamily:MONO, flexShrink:0, lineHeight:1.5 }}>
-            {volStr(simVol)}
+            {(volMuteScreen?.level_vol?.levelPreStr ?? "")}{volStr(simVol)}{(volMuteScreen?.level_vol?.levelPostStr ?? "")}
           </div>
         </div>
       );
     }
 
     const titleTxt = navPath.length === 0
-      ? "MAIN MENU"
-      : (currentMenu?.display_txt || navPath[navPath.length-1]?.label || "MENU");
+      ? (mainMenu?.display_txt || "")
+      : (currentMenu?.display_txt || navPath[navPath.length-1]?.label || "");
 
     const showFaderFooter = simScreen === "fader";
 
@@ -285,7 +285,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
         ) : (
           <div style={{ color:C.lcd, textAlign:"center", fontSize:10, fontFamily:MONO,
             flexShrink:0, height:13, display:"flex", alignItems:"center", justifyContent:"center" }}>
-            {volStr(activeFaderVol)}
+            {(volMuteScreen?.level_vol?.levelPreStr ?? "")}{volStr(activeFaderVol)}{(volMuteScreen?.level_vol?.levelPostStr ?? "")}
           </div>
         )}
       </div>

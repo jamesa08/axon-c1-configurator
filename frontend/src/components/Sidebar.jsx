@@ -62,6 +62,8 @@ export function SbDeviceRow({ device, active, onClick }) {
 
 export function SbUnitRow({ unit, active, onClick }) {
   const [hov, setHov] = useState(false);
+  const online = unit.online;
+  const fw = unit.firmware && unit.firmware !== "--" ? unit.firmware : null;
   return (
     <div
       onClick={onClick}
@@ -69,18 +71,37 @@ export function SbUnitRow({ unit, active, onClick }) {
       onMouseLeave={()=>setHov(false)}
       style={{
         display:"flex", alignItems:"center", gap:8,
-        padding:"4px 10px", margin:"0 4px", borderRadius:6,
+        padding:"5px 10px", margin:"0 4px", borderRadius:6,
         cursor:"pointer", userSelect:"none",
         background: active ? C.accent : hov ? C.s2 : "transparent",
         transition:"background .1s",
       }}>
-      <span style={{ fontSize:13, color: active ? "#0b0d14" : C.dim, width:18, textAlign:"center", flexShrink:0 }}>&#9723;</span>
+      <div style={{
+        width:18, height:18, borderRadius:3, flexShrink:0,
+        background: active ? "rgba(0,0,0,.15)" : C.s2,
+        border: `1px solid ${active ? "rgba(0,0,0,.2)" : C.border}`,
+        display:"flex", alignItems:"center", justifyContent:"center",
+      }}>
+        <div style={{
+          width:8, height:8, borderRadius:1,
+          background: active ? "#0b0d14" : C.mid,
+          opacity: active ? 0.7 : 0.5,
+        }} />
+      </div>
       <div style={{ flex:1, overflow:"hidden" }}>
         <div style={{ fontSize:11, fontWeight:500, color: active ? "#0b0d14" : C.mid,
           overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{unit.name}</div>
-        <div style={{ fontSize:9, color: active ? "rgba(0,0,0,.55)" : C.dim, fontFamily:MONO }}>{unit.ip}</div>
+        <div style={{ fontSize:9, color: active ? "rgba(0,0,0,.55)" : C.dim, fontFamily:MONO,
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          {unit.ip}{fw ? ` · v${fw}` : ""}
+        </div>
       </div>
-      <span style={{ fontSize:10, color: active ? "#0b0d14" : C.dim, opacity:.6 }}>&#8250;</span>
+      <div style={{
+        width:6, height:6, borderRadius:"50%", flexShrink:0,
+        background: online ? C.sage : C.dim,
+        opacity: online ? 1 : 0.35,
+        boxShadow: online ? `0 0 4px ${C.sage}` : "none",
+      }} />
     </div>
   );
 }

@@ -27,7 +27,7 @@ export default function SettingsPanel({ config, setConfig }) {
     <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",display:"flex",flexDirection:"column",gap:0,width:"100%",boxSizing:"border-box" }}>
       <SectionHead>Device</SectionHead>
       <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
-        <FieldRow label="Device name" hint="SDN"><input value={config.deviceName} onChange={e=>upd("deviceName",e.target.value)} style={{ maxWidth:220 }} /></FieldRow>
+        <FieldRow label="Device name" hint="SDN"><input value={config.deviceName} maxLength={16} onChange={e=>upd("deviceName",e.target.value.replace(/\s/g,"").slice(0,16))} style={{ maxWidth:220 }} /></FieldRow>
         <FieldRow label="IP address"><input value={config.ip} onChange={e=>upd("ip",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} /></FieldRow>
         <FieldRow label="Mode">
           <select value={config.mode} onChange={e=>upd("mode",e.target.value)} style={{ maxWidth:220 }}>
@@ -74,7 +74,7 @@ export default function SettingsPanel({ config, setConfig }) {
           ))}
         </FieldRow>
         <FieldRow label="Brightness" hint="SLBB  0-10">
-          <input type="range" min={0} max={10} value={config.lbBrightness} onChange={e=>upd("lbBrightness",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
+          <input type="range" min={1} max={10} value={config.lbBrightness} onChange={e=>upd("lbBrightness",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
           <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:24 }}>{config.lbBrightness}</span>
         </FieldRow>
         <FieldRow label="Timeout" hint="SLBT  10-600 s">

@@ -3,7 +3,7 @@ import { C, MONO } from "../tokens.js";
 import { addLog } from "../helpers.js";
 import { Btn, Tag, SectionHead } from "./Primitives.jsx";
 
-export default function PushPanel({ config, setConfig }) {
+export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
   const [lines,setLines] = useState([]);
   const [running,setRunning] = useState(false);
   const [done,setDone] = useState(false);
@@ -114,16 +114,21 @@ export default function PushPanel({ config, setConfig }) {
         }
       }
 
-      if (finalResult?.ok) {
+      const hasDeviceErrors = (finalResult?.push_errors?.length ?? 0) > 0;
+      if (finalResult?.ok && !hasDeviceErrors) {
         add(`OK  Config committed. Hash: ${finalResult.hash}`);
         setConfig(c=>({...c, configHash: finalResult.hash}));
         addLog("ACK", `Push complete. SMID=${finalResult.hash?.slice(0,12)}...`);
         setPushOk(true);
+        onPushResult?.(true);
       } else {
-        const errMsg = finalResult?.error ?? "Unknown error";
+        const errMsg = hasDeviceErrors
+          ? `Device reported ${finalResult.push_errors.length} error(s) — see log above`
+          : (finalResult?.error ?? "Unknown error");
         add(`ERROR: ${errMsg}`);
         addLog("ERR", `Push failed: ${errMsg}`);
         setPushOk(false);
+        onPushResult?.(false);
       }
 
     } catch(err) {
@@ -151,10 +156,13 @@ export default function PushPanel({ config, setConfig }) {
       setConfig(c=>({...c,configHash:hash}));
       addLog("ACK",`Push complete (sim). SMID=${hash.slice(0,12)}...`);
       setPushOk(true);
+      onPushResult?.(true);
     }
 
     setRunning(false); setDone(true);
   };
+
+  if (runRef) runRef.current = run;
 
   return (
     <div style={{ padding:"20px 24px",overflowY:"auto",height:"100%",width:"100%",boxSizing:"border-box" }}>

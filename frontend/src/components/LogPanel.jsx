@@ -6,8 +6,8 @@ import { Btn } from "./Primitives.jsx";
 export default function LogPanel() {
   const entries = useLog();
   const [filter,setFilter] = useState("ALL");
-  const types = ["ALL","SV","SM","TR","ACK","ERR","INFO"];
-  const LC = { SV:C.green, SM:C.warn, TR:C.blue, ACK:C.green, ERR:C.danger, INFO:C.dim };
+  const types = ["ALL","SYNC","SV","SM","TR","ACK","ERR","INFO"];
+  const LC = { SYNC:C.blue, SV:C.green, SM:C.warn, TR:C.blue, ACK:C.green, ERR:C.danger, INFO:C.dim };
   const filtered = filter==="ALL" ? entries : entries.filter(e=>e.type===filter);
   return (
     <div style={{ display:"flex",flexDirection:"column",height:"100%",overflow:"hidden" }}>

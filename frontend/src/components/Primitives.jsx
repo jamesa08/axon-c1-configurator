@@ -73,7 +73,7 @@ export function Tag({ children, color="dim" }) {
   );
 }
 
-export function HR() { return <div style={{ height:"1px", background:C.border, margin:"14px 0" }} />; }
+export function HR() { return <div style={{ display:"block", flex:"none", height:"1px", alignSelf:"stretch", background:C.borderHi, margin:"14px 0" }} />; }
 
 export function SectionHead({ children }) {
   return (
