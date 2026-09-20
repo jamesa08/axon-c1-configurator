@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Build frontend
         working-directory: frontend
@@ -35,6 +35,13 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
+          # Force-install universal2 wheels for packages with native extensions
+          pip download \
+            --platform macosx_10_13_universal2 \
+            --only-binary=:all: \
+            --dest /tmp/u2_wheels \
+            aiohttp frozenlist multidict yarl propcache zeroconf
+          pip install --no-deps --force-reinstall /tmp/u2_wheels/*.whl
 
       - name: Build app bundle
         run: |
