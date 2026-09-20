@@ -92,4 +92,9 @@ button{
   cursor:pointer;font-family:${SANS};border:none;outline:none;
   font-size:12px;font-weight:400;
 }
+@keyframes syncBar{
+  0%{width:0%;margin-left:0}
+  50%{width:60%;margin-left:20%}
+  100%{width:0%;margin-left:100%}
+}
 `;

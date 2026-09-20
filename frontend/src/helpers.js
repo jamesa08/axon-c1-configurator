@@ -11,7 +11,21 @@ export const svSetBytes  = ch => [...`SV ${ch} `].map(c=>c.charCodeAt(0)).concat
 export const svQueryBytes = ch => [...`SV ${ch} `].map(c=>c.charCodeAt(0)).concat([0x0d]);
 export const svRespBytes  = ch => svSetBytes(ch);
 export const trBytes     = n  => [...`TR ${n}`].map(c=>c.charCodeAt(0)).concat([0x0d]);
-export const bytesToStr  = arr => arr.length ? arr.map(b => b === 0xe3 ? "\\xe3" : b === 0x0d ? "\\r" : String.fromCharCode(b)).join("") : "(empty)";
+export const bytesToStr  = arr => arr.length ? arr.map(b => b === 0xe3 ? "\\xe3" : b === 0x0d ? "\\r" : b === 0x00 ? "\\x00" : String.fromCharCode(b)).join("") : "";
+export const strToBytes  = str => {
+  const out = [];
+  let i = 0;
+  while (i < str.length) {
+    if (str[i] === "\\") {
+      const esc = str.slice(i, i + 4);
+      if (/^\\x[0-9a-fA-F]{2}/.test(esc)) { out.push(parseInt(esc.slice(2), 16)); i += 4; continue; }
+      if (str[i+1] === "r") { out.push(0x0d); i += 2; continue; }
+      if (str[i+1] === "n") { out.push(0x0a); i += 2; continue; }
+    }
+    out.push(str.charCodeAt(i)); i++;
+  }
+  return out;
+};
 
 // --- LOG BUS ------------------------------------------------------------------
 export const LOG = { cbs:[], entries:[], push(e){ this.entries=[e,...this.entries].slice(0,400); this.cbs.forEach(f=>f(this.entries)); }};

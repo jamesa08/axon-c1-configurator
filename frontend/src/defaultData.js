@@ -1,13 +1,13 @@
-import { uid, svSetBytes, svQueryBytes, svRespBytes, trBytes } from "./helpers.js";
+import { uid, trBytes } from "./helpers.js";
 
 // --- DEFAULT DATA -------------------------------------------------------------
 export const mkDevice = (name, ip, port, asyncPort) => ({ id:uid(), name, ip, port:port??49500, asyncIp:ip, asyncPort:asyncPort??49500, proto:"UDP", type:"general" });
 
 export const mkLevelVol = (ch, devName) => ({
-  setBytes:       svSetBytes(ch),
-  queryBytes:     svQueryBytes(ch),
-  respQueryBytes: svRespBytes(ch),
-  syncBytes:      svSetBytes(ch),
+  setBytes:       [],
+  queryBytes:     [],
+  respQueryBytes: [],
+  syncBytes:      [],
   minParam: -100, maxParam: 20, stepSize: 2, paramDecPts: 0,
   trimEnable: false, pollMs: 500,
   queryEnable: true, asyncEnable: true,
@@ -55,30 +55,63 @@ export const mkTriggerEntry = (name, n, devName) => ({
 
 export const mkMenuEntry = (name) => ({ id:uid(), entry_type:"menu", display_txt:name, entries:[] });
 
+export const mkMacroAction = (devName = "") => ({
+  id: uid(),
+  name: "Action",
+  dev: devName,
+  bytes: [],
+  cr: true,
+  lf: false,
+});
+
+export const mkStartupMacro = (devName = "") => ({
+  enabled: true,
+  name: "Init Macro",
+  actions: [mkMacroAction(devName)],
+});
+
+export const mkStartupSync = (devName = "") => ({
+  enabled: true,
+  name: "Sync Action",
+  // Config tab
+  destination: devName,
+  hexValues: false,
+  inactiveState: [],
+  activeState: [],
+  // Query tab
+  queryEnable: false,
+  queryInterval: 500,
+  queryBytes: [],
+  queryCr: true,
+  queryLf: false,
+  queryResponse: [],
+  // Async tab
+  asyncEnable: false,
+  asyncIp: "",
+  asyncPort: 49500,
+  asyncType: "UDP",
+  asyncSrcIp: "",
+  asyncBytes: [],
+  asyncCr: true,
+  asyncLf: false,
+});
+
 export const mkDefaultConfig = () => {
-  const devices = [
-    mkDevice("QSC",      "192.168.1.10",  49500, 49500),
-    mkDevice("Computer", "192.168.1.100", 49494, 49494),
-  ];
-  const devName = devices[0].name;
-  const volMuteScreen = mkLevelEntry("Vol/Mute Screen", 1, devName);
+  const volMuteScreen = mkLevelEntry("Vol/Mute Screen", 1, "");
   volMuteScreen._isRoot = true; // 0xFFFE
 
   const mainMenu = mkMenuEntry("MAIN MENU");
-  const levels18  = mkMenuEntry("LEVELS 1-8");
-  const levels915 = mkMenuEntry("LEVELS 9-16");
-  const triggers  = mkMenuEntry("TRIGGERS");
-  for (let i=1;i<=8;i++)  levels18.entries.push(mkLevelEntry(`G${i}`,   i+1, devName));
-  for (let i=9;i<=16;i++) levels915.entries.push(mkLevelEntry(`G${i}`, i+1, devName));
-  for (let i=1;i<=8;i++)  triggers.entries.push(mkTriggerEntry(`Entry - ${i}`, i, devName));
-  mainMenu.entries = [levels18, levels915, triggers];
 
   return {
     volMuteEnabled: true,
     menuEnabled: true,
     volMuteScreen,
     mainMenu,
-    devices,
+    devices: [],
+    startupSyncEnabled: false,
+    startupSync: null,
+    startupMacroEnabled: false,
+    startupMacro: null,
     // device settings
     deviceName: "AxonC1-000000",
     ip: "192.168.1.200",
