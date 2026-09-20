@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { Btn, Toggle, Tag, HR, SectionHead, FieldRow } from "./Primitives.jsx";
 import NicPicker from "./NicPicker.jsx";
 
@@ -63,27 +63,27 @@ export default function SettingsPanel({ config, setConfig }) {
       <div style={{ flex:1, overflowY:"auto", padding:"20px 24px", display:"flex", flexDirection:"column", gap:0, boxSizing:"border-box" }}>
         <SectionHead>Device</SectionHead>
         <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
-          <FieldRow label="Device name" hint="SDN"><input value={draft.deviceName} maxLength={16} onChange={e=>upd("deviceName",e.target.value.replace(/\s/g,"").slice(0,16))} style={{ maxWidth:220 }} /></FieldRow>
-          <FieldRow label="IP address"><input value={draft.ip} onChange={e=>upd("ip",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} /></FieldRow>
+          <FieldRow label="Device Name" hint="SDN"><input value={draft.deviceName} maxLength={16} onChange={e=>upd("deviceName",e.target.value.replace(/\s/g,"").slice(0,16))} style={{ maxWidth:220 }} /></FieldRow>
+          <FieldRow label="IP Address"><input value={draft.ip} onChange={e=>upd("ip",e.target.value)} style={{ maxWidth:160,fontFamily:SANS }} /></FieldRow>
           <FieldRow label="Mode">
             <select value={draft.mode} onChange={e=>upd("mode",e.target.value)} style={{ maxWidth:220 }}>
               <option value="THIRD_PARTY">Third Party</option>
               <option value="Q-SYS">Q-SYS</option>
             </select>
           </FieldRow>
-          <FieldRow label="Firmware"><span style={{ fontFamily:MONO,fontSize:11,color:C.mono }}>{config.firmwareVersion}</span></FieldRow>
-          <FieldRow label="MAC"><span style={{ fontFamily:MONO,fontSize:11,color:C.mono }}>{config.mac}</span></FieldRow>
+          <FieldRow label="Firmware"><span style={{ fontFamily:SANS,fontSize:11,color:C.mono }}>{config.firmwareVersion}</span></FieldRow>
+          <FieldRow label="MAC"><span style={{ fontFamily:SANS,fontSize:11,color:C.mono }}>{config.mac}</span></FieldRow>
         </div>
         <HR />
         <SectionHead>Display</SectionHead>
         <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
           <FieldRow label="Brightness" hint="SDB  1-10">
             <input type="range" min={1} max={10} value={draft.displayBrightness} onChange={e=>upd("displayBrightness",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
-            <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:24 }}>{draft.displayBrightness}</span>
+            <span style={{ fontFamily:SANS,fontSize:12,color:C.mono,minWidth:24 }}>{draft.displayBrightness}</span>
           </FieldRow>
           <FieldRow label="Timeout" hint="SDT  10-600 s">
             <input type="range" min={10} max={600} step={10} value={draft.displayTimeout} onChange={e=>upd("displayTimeout",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
-            <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:36 }}>{draft.displayTimeout}s</span>
+            <span style={{ fontFamily:SANS,fontSize:12,color:C.mono,minWidth:36 }}>{draft.displayTimeout}s</span>
           </FieldRow>
           <FieldRow label="Rotation" hint="SDR">
             <Btn small active={draft.displayRotation===0} onClick={()=>upd("displayRotation",0)}>Normal</Btn>
@@ -99,21 +99,21 @@ export default function SettingsPanel({ config, setConfig }) {
         <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
           <FieldRow label="Brightness" hint="SLBB  0-10">
             <input type="range" min={1} max={10} value={draft.lbBrightness} onChange={e=>upd("lbBrightness",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
-            <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:24 }}>{draft.lbBrightness}</span>
+            <span style={{ fontFamily:SANS,fontSize:12,color:C.mono,minWidth:24 }}>{draft.lbBrightness}</span>
           </FieldRow>
           <FieldRow label="Timeout" hint="SLBT  10-600 s">
             <input type="range" min={10} max={600} step={10} value={draft.lbTimeout} onChange={e=>upd("lbTimeout",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
-            <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:36 }}>{draft.lbTimeout}s</span>
+            <span style={{ fontFamily:SANS,fontSize:12,color:C.mono,minWidth:36 }}>{draft.lbTimeout}s</span>
           </FieldRow>
         </div>
         <HR />
         <SectionHead>Security</SectionHead>
         <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
-          <FieldRow label="PIN lock" hint="SLPM"><Toggle value={draft.pinEnabled} onChange={v=>upd("pinEnabled",v)} /></FieldRow>
+          <FieldRow label="PIN Lock" hint="SLPM"><Toggle value={draft.pinEnabled} onChange={v=>upd("pinEnabled",v)} /></FieldRow>
           {draft.pinEnabled&&(
             <FieldRow label="PIN" hint="SLP  0000-9999">
               <input value={draft.pin} maxLength={4} onChange={e=>upd("pin",e.target.value.replace(/\D/g,"").slice(0,4))}
-                style={{ maxWidth:80,fontFamily:MONO,letterSpacing:"0.2em",fontSize:14 }} placeholder="0000" />
+                style={{ maxWidth:80,fontFamily:SANS,letterSpacing:"0.2em",fontSize:14 }} placeholder="0000" />
             </FieldRow>
           )}
         </div>
@@ -125,12 +125,12 @@ export default function SettingsPanel({ config, setConfig }) {
             <Btn small active={!draft.dhcp} onClick={()=>upd("dhcp",false)}>Static</Btn>
           </FieldRow>
           {!draft.dhcp&&(<>
-            <FieldRow label="Static IP"><input value={draft.staticIp} onChange={e=>upd("staticIp",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} placeholder="192.168.1.100" /></FieldRow>
-            <FieldRow label="Subnet mask"><input value={draft.staticMask} onChange={e=>upd("staticMask",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} placeholder="255.255.255.0" /></FieldRow>
-            <FieldRow label="Gateway"><input value={draft.staticGw} onChange={e=>upd("staticGw",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} placeholder="192.168.1.1" /></FieldRow>
+            <FieldRow label="Static IP"><input value={draft.staticIp} onChange={e=>upd("staticIp",e.target.value)} style={{ maxWidth:160,fontFamily:SANS }} placeholder="192.168.1.100" /></FieldRow>
+            <FieldRow label="Subnet Mask"><input value={draft.staticMask} onChange={e=>upd("staticMask",e.target.value)} style={{ maxWidth:160,fontFamily:SANS }} placeholder="255.255.255.0" /></FieldRow>
+            <FieldRow label="Gateway"><input value={draft.staticGw} onChange={e=>upd("staticGw",e.target.value)} style={{ maxWidth:160,fontFamily:SANS }} placeholder="192.168.1.1" /></FieldRow>
           </>)}
-          <FieldRow label="Dest IP" hint="SV/SM/TR destination"><input value={draft.destIp} onChange={e=>upd("destIp",e.target.value)} style={{ maxWidth:160,fontFamily:MONO }} /></FieldRow>
-          <FieldRow label="Dest port"><input type="number" value={draft.destPort} onChange={e=>upd("destPort",Number(e.target.value))} style={{ maxWidth:100,fontFamily:MONO }} /></FieldRow>
+          <FieldRow label="Dest IP" hint="SV/SM/TR destination"><input value={draft.destIp} onChange={e=>upd("destIp",e.target.value)} style={{ maxWidth:160,fontFamily:SANS }} /></FieldRow>
+          <FieldRow label="Dest Port"><input type="number" value={draft.destPort} onChange={e=>upd("destPort",Number(e.target.value))} style={{ maxWidth:100,fontFamily:SANS }} /></FieldRow>
           <FieldRow label="Host NIC" hint="Interface for push/async traffic">
             <NicPicker value={draft.selfIp || ""} onChange={v=>upd("selfIp",v)} />
           </FieldRow>

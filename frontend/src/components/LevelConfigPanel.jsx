@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { bytesToStr, strToBytes } from "../helpers.js";
 import { Tabs, Toggle, FieldRow, HR } from "./Primitives.jsx";
 
 const SectionLabel = ({ children }) => (
-  <div style={{ fontSize:10, fontWeight:700, color:C.mid, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2, marginTop:2 }}>
+  <div style={{ fontSize:11, fontWeight:600, color:C.mid, letterSpacing:"0.04em", marginBottom:2, marginTop:2 }}>
     {children}
   </div>
 );
@@ -18,7 +18,7 @@ function ByteField({ bytes, onChange }) {
       value={draft}
       onChange={e => setDraft(e.target.value)}
       onBlur={() => onChange(strToBytes(draft))}
-      style={{ fontFamily:MONO, fontSize:11, width:"100%" }}
+      style={{ fontFamily:SANS, fontSize:11, width:"100%" }}
       spellCheck={false}
       placeholder=""
     />
@@ -53,14 +53,14 @@ export default function LevelConfigPanel({ entry, devices, onChange }) {
           </select>
         </FieldRow>
         {dev && (<>
-          <FieldRow label="IP"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.ip}</span></FieldRow>
-          <FieldRow label="Port"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.port}</span></FieldRow>
+          <FieldRow label="IP"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.ip}</span></FieldRow>
+          <FieldRow label="Port"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.port}</span></FieldRow>
         </>)}
-        <FieldRow label="Pre-label">
-          <input value={ctrl.levelPreStr ?? ""} onChange={e => updCtrl("levelPreStr", e.target.value.slice(0, 7))} maxLength={7} style={{ maxWidth:120, fontFamily:MONO }} placeholder='e.g. ""' />
+        <FieldRow label="Pre-Label">
+          <input value={ctrl.levelPreStr ?? ""} onChange={e => updCtrl("levelPreStr", e.target.value.slice(0, 7))} maxLength={7} style={{ maxWidth:120, fontFamily:SANS }} placeholder='e.g. ""' />
         </FieldRow>
-        <FieldRow label="Post-label">
-          <input value={ctrl.levelPostStr ?? ""} onChange={e => updCtrl("levelPostStr", e.target.value.slice(0, 7))} maxLength={7} style={{ maxWidth:120, fontFamily:MONO }} placeholder='e.g. " dB"' />
+        <FieldRow label="Post-Label">
+          <input value={ctrl.levelPostStr ?? ""} onChange={e => updCtrl("levelPostStr", e.target.value.slice(0, 7))} maxLength={7} style={{ maxWidth:120, fontFamily:SANS }} placeholder='e.g. " dB"' />
         </FieldRow>
 
         {isLevel && (<>
@@ -71,13 +71,13 @@ export default function LevelConfigPanel({ entry, devices, onChange }) {
             </select>
           </FieldRow>
           <FieldRow label="Min" hint="dB">
-            <input type="number" value={ctrl.minParam} onChange={e => updCtrl("minParam", Number(e.target.value))} style={{ maxWidth:90, fontFamily:MONO }} />
+            <input type="number" value={ctrl.minParam} onChange={e => updCtrl("minParam", Number(e.target.value))} style={{ maxWidth:90, fontFamily:SANS }} />
           </FieldRow>
           <FieldRow label="Max" hint="dB">
-            <input type="number" value={ctrl.maxParam} onChange={e => updCtrl("maxParam", Number(e.target.value))} style={{ maxWidth:90, fontFamily:MONO }} />
+            <input type="number" value={ctrl.maxParam} onChange={e => updCtrl("maxParam", Number(e.target.value))} style={{ maxWidth:90, fontFamily:SANS }} />
           </FieldRow>
           <FieldRow label="Step" hint="dB">
-            <input type="number" value={ctrl.stepSize} onChange={e => updCtrl("stepSize", Number(e.target.value))} style={{ maxWidth:90, fontFamily:MONO }} />
+            <input type="number" value={ctrl.stepSize} onChange={e => updCtrl("stepSize", Number(e.target.value))} style={{ maxWidth:90, fontFamily:SANS }} />
           </FieldRow>
           <FieldRow label="Precision">
             <select value={ctrl.paramDecPts} onChange={e => updCtrl("paramDecPts", Number(e.target.value))} style={{ maxWidth:90 }}>
@@ -121,7 +121,7 @@ export default function LevelConfigPanel({ entry, devices, onChange }) {
           <Toggle value={ctrl.queryEnable} onChange={v => updCtrl("queryEnable", v)} />
         </FieldRow>
         <FieldRow label="Interval" hint="ms">
-          <input type="number" value={ctrl.pollMs} onChange={e => updCtrl("pollMs", Number(e.target.value))} style={{ maxWidth:90, fontFamily:MONO }} />
+          <input type="number" value={ctrl.pollMs} onChange={e => updCtrl("pollMs", Number(e.target.value))} style={{ maxWidth:90, fontFamily:SANS }} />
           <span style={{ fontSize:11, color:C.mid }}>ms</span>
         </FieldRow>
         <FieldRow label="Query">
@@ -142,8 +142,8 @@ export default function LevelConfigPanel({ entry, devices, onChange }) {
           <Toggle value={ctrl.asyncEnable} onChange={v => updCtrl("asyncEnable", v)} />
         </FieldRow>
         {dev && (<>
-          <FieldRow label="Async IP"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.asyncIp}</span></FieldRow>
-          <FieldRow label="Async Port"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.asyncPort}</span></FieldRow>
+          <FieldRow label="Async IP"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.asyncIp}</span></FieldRow>
+          <FieldRow label="Async Port"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.asyncPort}</span></FieldRow>
         </>)}
         <FieldRow label="Async response">
           <ByteField bytes={ctrl.syncBytes} onChange={v => updCtrl("syncBytes", v)} />

@@ -301,7 +301,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
         width:210, height:340,
         background:"linear-gradient(155deg,#2a2a2a 0%,#1e1e1e 60%,#181818 100%)",
         borderRadius:9,
-        boxShadow:"0 2px 4px rgba(0,0,0,.5),0 16px 48px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,0.06)",
+        boxShadow:"rgb(255 255 255 / 98%) -1px -1px 1px, rgb(0 0 0 / 25%) 0px 8px 8px, rgb(255 255 255 / 8%) 0px 1px 0px inset",
         display:"flex", alignItems:"center", justifyContent:"center",
       }}>
         <div style={{
@@ -321,9 +321,9 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
               onClick={onKnobClick}
               style={{
                 width:58, height:58, borderRadius:"50%",
-                background:"radial-gradient(circle at 33% 28%,#3a3a3a 0%,#252525 55%,#1c1c1c 100%)",
+                background:"#212121",
                 border:"1px solid #444",
-                boxShadow:"0 3px 8px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,0.06)",
+                boxShadow:"0 3px 8px rgba(0,0,0,.6)",
                 position:"relative", cursor:"ns-resize", userSelect:"none",
               }}
               title="Drag to navigate / change volume. Click to enter."

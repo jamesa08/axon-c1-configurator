@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
+const FIRA = "'Fira Code',monospace";
 import { addLog } from "../helpers.js";
 import { Btn, Tag, SectionHead } from "./Primitives.jsx";
 
@@ -9,6 +10,7 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
   const [done,setDone] = useState(false);
   const [pushOk,setPushOk] = useState(null);
   const [importing,setImporting] = useState(false);
+  const [cfgMsg,setCfgMsg] = useState(null); // { ok, text }
   const ref = useRef(null);
   const fileRef = useRef(null);
 
@@ -27,7 +29,8 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
       a.download = `${name}.cfg`;
       a.click();
       URL.revokeObjectURL(a.href);
-    } catch(e) { alert(`Export failed: ${e.message}`); }
+      setCfgMsg({ ok:true, text:`Exported ${name}.cfg` });
+    } catch(e) { setCfgMsg({ ok:false, text:`Export failed: ${e.message}` }); }
   };
 
   const handleImport = async (file) => {
@@ -49,9 +52,9 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
           firmwareVersion: prev.firmwareVersion,
         }));
       } else {
-        alert(`Import failed: ${j.error || "Unknown error"}`);
+        setCfgMsg({ ok:false, text:`Import failed: ${j.error || "Unknown error"}` });
       }
-    } catch(e) { alert(`Import failed: ${e.message}`); }
+    } catch(e) { setCfgMsg({ ok:false, text:`Import failed: ${e.message}` }); }
     setImporting(false);
   };
 
@@ -169,7 +172,7 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
       <SectionHead>Push to Device</SectionHead>
       <p style={{ fontSize:12,color:C.mid,lineHeight:1.7,marginBottom:16 }}>
         Sends the full configuration packet sequence to{" "}
-        <span style={{ fontFamily:MONO,color:C.mono }}>{config.ip}:49494</span>.
+        <span style={{ fontFamily:SANS,color:C.mono }}>{config.ip}:49494</span>.
         The device will restart its menu with the new settings after a successful push.
       </p>
       <div style={{ display:"flex",gap:10,alignItems:"center",marginBottom:16,flexWrap:"wrap" }}>
@@ -185,7 +188,7 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
         <Btn onClick={handleExport} disabled={!config.ip || config.ip==="192.168.1.xxx"}>
           Export .cfg
         </Btn>
-        <Btn onClick={()=>fileRef.current?.click()} disabled={importing}>
+        <Btn onClick={()=>{ setCfgMsg(null); fileRef.current?.click(); }} disabled={importing}>
           {importing ? "Importing..." : "Import .cfg"}
         </Btn>
         <input
@@ -193,21 +196,25 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
           style={{ display:"none" }}
           onChange={e => { const f=e.target.files?.[0]; if(f) handleImport(f); e.target.value=""; }}
         />
-        <span style={{ fontSize:10,color:C.dim }}>Import restores device settings and menu from a .cfg snapshot file.</span>
+        {cfgMsg ? (
+          <span style={{ fontSize:12, color: cfgMsg.ok ? C.sage : C.danger }}>{cfgMsg.text}</span>
+        ) : (
+          <span style={{ fontSize:11,color:C.dim }}>Import restores device settings and menu from a .cfg snapshot file.</span>
+        )}
       </div>
       {lines.length>0&&(
-        <div ref={ref} style={{ background:C.s0,border:`1px solid ${C.border}`,borderRadius:3,
-          padding:"8px 10px",fontFamily:MONO,fontSize:11,lineHeight:1.85,
-          height:280,overflowY:"auto",color:C.mono }}>
+        <div ref={ref} style={{ background:"#000",border:`1px solid #333`,
+          padding:"8px 10px",fontFamily:FIRA,fontWeight:700,fontSize:13,lineHeight:1.85,
+          height:280,overflowY:"auto",color:"#ffffff" }}>
           {lines.map((l,i)=>{
-            let color = C.mono;
-            if (l.startsWith("OK"))                                    color = C.green;
+            let color = "#e5e7eb";
+            if (l.startsWith("OK"))                                    color = "#4ade80";
             else if (l.startsWith("ERROR") || l.includes("FAIL") ||
                      l.includes("DEVICE REPORTED") || l.includes("result="))
-                                                                        color = C.danger;
-            else if (l.startsWith("WARNING") || l.includes("WARN"))   color = C.warn;
-            else if (l.startsWith("---") || l.startsWith("==="))      color = C.mid;
-            else if (l.startsWith(">"))                                color = C.orange;
+                                                                        color = "#f87171";
+            else if (l.startsWith("WARNING") || l.includes("WARN"))   color = "#fbbf24";
+            else if (l.startsWith("---") || l.startsWith("==="))      color = "#9ca3af";
+            else if (l.startsWith(">"))                                color = "#60a5fa";
             return <div key={i} style={{ color }}>{l}</div>;
           })}
         </div>

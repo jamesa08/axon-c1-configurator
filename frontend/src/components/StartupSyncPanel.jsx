@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { bytesToStr } from "../helpers.js";
 import { FieldRow, HR, Tabs, Toggle } from "./Primitives.jsx";
 
@@ -29,7 +29,7 @@ function BytesInput({ value, onChange }) {
           if (ok) onChange(bytes);
         }}
         style={{
-          width:"100%", fontSize:11, fontFamily:MONO,
+          width:"100%", fontSize:11, fontFamily:SANS,
           borderColor: err ? C.danger : undefined,
         }}
         placeholder="ASCII or \xHH escapes, \r for CR"
@@ -57,17 +57,17 @@ export default function StartupSyncPanel({ sync, devices, onChange }) {
             </select>
           </FieldRow>
           {selDev && (<>
-            <FieldRow label="Device"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{selDev.name}</span></FieldRow>
-            <FieldRow label="IP"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{selDev.ip}</span></FieldRow>
-            <FieldRow label="Port"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{selDev.port}</span></FieldRow>
-            <FieldRow label="Type"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{selDev.proto || "UDP"}</span></FieldRow>
+            <FieldRow label="Device"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{selDev.name}</span></FieldRow>
+            <FieldRow label="IP"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{selDev.ip}</span></FieldRow>
+            <FieldRow label="Port"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{selDev.port}</span></FieldRow>
+            <FieldRow label="Type"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{selDev.proto || "UDP"}</span></FieldRow>
           </>)}
           <FieldRow label="Hex Values">
             <Toggle value={sync.hexValues || false} onChange={v => upd("hexValues", v)} />
             <span style={{ fontSize:11, color:C.dim }}>{sync.hexValues ? "Binary (hex input)" : "ASCII"}</span>
           </FieldRow>
           <HR />
-          <div style={{ fontSize:10, fontWeight:600, color:C.dim, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>Attributes</div>
+          <div style={{ fontSize:11, fontWeight:600, color:C.dim, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>Attributes</div>
           <FieldRow label="Inactive State">
             <BytesInput value={sync.inactiveState || []} onChange={v => upd("inactiveState", v)} />
           </FieldRow>

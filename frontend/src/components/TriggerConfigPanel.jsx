@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { bytesToStr, strToBytes } from "../helpers.js";
-import { Tag, FieldRow, HR } from "./Primitives.jsx";
+import { Tag, FieldRow, HR, SectionHead } from "./Primitives.jsx";
 
 export default function TriggerConfigPanel({ entry, devices, onChange }) {
   const devOptions = devices.map(d => d.name);
@@ -46,8 +46,8 @@ export default function TriggerConfigPanel({ entry, devices, onChange }) {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-      <div style={{ fontSize:10, color:C.dim, marginBottom:4 }}>Action Configuration</div>
-      <FieldRow label="Control mode"><Tag color="orange">3rd Party</Tag></FieldRow>
+      <SectionHead>Action Configuration</SectionHead>
+      <FieldRow label="Control Mode"><span style={{ fontSize:12, fontStyle:"italic", color:C.dim }}>3rd Party</span></FieldRow>
       <FieldRow label="Destination">
         <select value={entry.dev} onChange={e => onChange({ ...entry, dev: e.target.value })} style={{ maxWidth:180 }}>
           {devOptions.map(n => <option key={n}>{n}</option>)}
@@ -56,8 +56,8 @@ export default function TriggerConfigPanel({ entry, devices, onChange }) {
       {(() => {
         const dev = devices.find(d => d.name === entry.dev);
         return dev ? (<>
-          <FieldRow label="IP"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.ip}</span></FieldRow>
-          <FieldRow label="Port"><span style={{ fontFamily:MONO, fontSize:11, color:C.mono }}>{dev.port}</span></FieldRow>
+          <FieldRow label="IP"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.ip}</span></FieldRow>
+          <FieldRow label="Port"><span style={{ fontFamily:SANS, fontSize:11, color:C.mono }}>{dev.port}</span></FieldRow>
         </>) : null;
       })()}
       <HR />
@@ -67,7 +67,7 @@ export default function TriggerConfigPanel({ entry, devices, onChange }) {
             value={draft}
             onChange={e => setDraft(e.target.value)}
             onBlur={commitPayload}
-            style={{ fontFamily:MONO, fontSize:11, width:"100%" }}
+            style={{ fontFamily:SANS, fontSize:11, width:"100%" }}
             spellCheck={false}
             placeholder=""
           />
@@ -76,7 +76,7 @@ export default function TriggerConfigPanel({ entry, devices, onChange }) {
             const total = byteCount(b, entry.cr || false, entry.lf || false);
             const over = total > MAX_BYTES;
             return (
-              <span style={{ fontSize:10, color: over ? C.red : C.dim, fontFamily:MONO }}>
+              <span style={{ fontSize:11, color: over ? C.danger : C.dim, fontFamily:SANS }}>
                 {total}/{MAX_BYTES} bytes{over ? " — exceeds device limit" : ""}
               </span>
             );

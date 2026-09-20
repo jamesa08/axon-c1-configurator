@@ -1,5 +1,5 @@
 import React from "react";
-import { C, MONO } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { mkDevice } from "../defaultData.js";
 import { Btn, FieldRow } from "./Primitives.jsx";
 import { Plus } from "lucide-react";
@@ -18,7 +18,7 @@ export default function DeviceListPanel({ devices, setDevices, selectedName, onS
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div style={{ padding:"10px 12px", borderBottom:`1px solid ${C.border}`, flexShrink:0, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-        <span style={{ fontSize:11, fontWeight:600, color:C.mid, letterSpacing:"0.06em", textTransform:"uppercase" }}>3rd Party Devices</span>
+        <span style={{ fontSize:12, fontWeight:600, color:C.mid, letterSpacing:"0.06em", textTransform:"uppercase" }}>3rd Party Devices</span>
         <Btn small disabled={devices.length >= 3} onClick={() => {
           const d = mkDevice("New Device", "10.0.0.1");
           setDevices(ds => [...ds, d]);
@@ -42,7 +42,7 @@ export default function DeviceListPanel({ devices, setDevices, selectedName, onS
               <div style={{ width:6, height:6, borderRadius:"50%", background:C.green, flexShrink:0 }} />
               <span style={{ fontSize:12, fontWeight:500, color: selId === d.id ? C.text : C.mid }}>{d.name}</span>
             </div>
-            <div style={{ fontFamily:MONO, fontSize:10, color:C.dim, marginTop:2 }}>{d.ip}:{d.port}</div>
+            <div style={{ fontFamily:SANS, fontSize:11, color:C.dim, marginTop:2 }}>{d.ip}:{d.port}</div>
           </div>
         ))}
       </div>
@@ -56,16 +56,16 @@ export default function DeviceListPanel({ devices, setDevices, selectedName, onS
                 <input value={d.name} onChange={e => upd(d.id, "name", e.target.value)} />
               </FieldRow>
               <FieldRow label="IP">
-                <input value={d.ip} onChange={e => upd(d.id, "ip", e.target.value)} style={{ fontFamily:MONO }} />
+                <input value={d.ip} onChange={e => upd(d.id, "ip", e.target.value)} style={{ fontFamily:SANS }} />
               </FieldRow>
               <FieldRow label="Port">
-                <input type="number" value={d.port} onChange={e => upd(d.id, "port", Number(e.target.value))} style={{ fontFamily:MONO, width:90 }} />
+                <input type="number" value={d.port} onChange={e => upd(d.id, "port", Number(e.target.value))} style={{ fontFamily:SANS, width:90 }} />
               </FieldRow>
               <FieldRow label="Async IP">
-                <input value={d.asyncIp || ""} onChange={e => upd(d.id, "asyncIp", e.target.value)} style={{ fontFamily:MONO }} />
+                <input value={d.asyncIp || ""} onChange={e => upd(d.id, "asyncIp", e.target.value)} style={{ fontFamily:SANS }} />
               </FieldRow>
               <FieldRow label="Async Port">
-                <input type="number" value={d.asyncPort} onChange={e => upd(d.id, "asyncPort", Number(e.target.value))} style={{ fontFamily:MONO, width:90 }} />
+                <input type="number" value={d.asyncPort} onChange={e => upd(d.id, "asyncPort", Number(e.target.value))} style={{ fontFamily:SANS, width:90 }} />
               </FieldRow>
               <FieldRow label="Proto">
                 <select value={d.proto || "UDP"} onChange={e => upd(d.id, "proto", e.target.value)} style={{ maxWidth:90 }}>

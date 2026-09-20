@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { C, MONO, SANS } from "../tokens.js";
+import { C, SANS } from "../tokens.js";
 import { ChevronUp, ChevronDown, X } from "lucide-react";
 import { bytesToStr, uid } from "../helpers.js";
 import { Btn, FieldRow, HR } from "./Primitives.jsx";
@@ -12,17 +12,17 @@ function ActionRow({ action, index, devices, onUpdate, onDelete, onMove, total }
 
   return (
     <div style={{
-      border:`1px solid ${C.border}`, borderRadius:5,
+      border:`1px solid ${C.border}`,
       background:C.s1, marginBottom:4,
     }}>
       {/* Header row */}
       <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", cursor:"pointer" }}
         onClick={() => setExpanded(e => !e)}>
-        <span style={{ fontSize:10, color:C.dim, minWidth:16, textAlign:"right" }}>{index+1}</span>
+        <span style={{ fontSize:11, color:C.dim, minWidth:16, textAlign:"right" }}>{index+1}</span>
         <span style={{ flex:1, fontSize:12, color:C.mid, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
           {action.name || "(unnamed)"}
         </span>
-        <span style={{ fontSize:10, color:C.dim, fontFamily:MONO }}>
+        <span style={{ fontSize:11, color:C.dim, fontFamily:SANS }}>
           {action.dev || "—"}
         </span>
         <div style={{ display:"flex", gap:2 }}>
@@ -62,7 +62,7 @@ function ActionRow({ action, index, devices, onUpdate, onDelete, onMove, total }
                 }
                 upd("bytes", bytes);
               }}
-              style={{ flex:1, fontFamily:MONO, fontSize:11 }}
+              style={{ flex:1, fontFamily:SANS, fontSize:11 }}
               placeholder="ASCII or \xHH, \r for CR"
             />
           </FieldRow>
@@ -111,7 +111,7 @@ export default function StartupMacroPanel({ macro, devices, onChange }) {
         <input value={macro.name || ""} onChange={e => upd("name", e.target.value)} style={{ maxWidth:200 }} />
       </FieldRow>
       <HR />
-      <div style={{ fontSize:10, fontWeight:600, color:C.dim, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2 }}>
+      <div style={{ fontSize:11, fontWeight:600, color:C.dim, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:2 }}>
         Actions  <span style={{ fontWeight:400, color:C.dim }}>({actions.length})</span>
       </div>
       {actions.length === 0 && (
