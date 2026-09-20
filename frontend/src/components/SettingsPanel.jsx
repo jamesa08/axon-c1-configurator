@@ -39,22 +39,10 @@ export default function SettingsPanel({ config, setConfig }) {
         await cmd(`SDT ${draft.displayTimeout}`);
       if (draft.displayRotation !== config.displayRotation)
         await cmd(`SDR ${draft.displayRotation}`);
-      if (draft.lbOn !== config.lbOn || draft.lbColor !== config.lbColor) {
-        if (!draft.lbOn) {
-          await cmd("SLC OFF");
-        } else {
-          const r = parseInt(draft.lbColor.slice(1,3), 16);
-          const g = parseInt(draft.lbColor.slice(3,5), 16);
-          const b = parseInt(draft.lbColor.slice(5,7), 16);
-          await cmd(`SLC ${r}:${g}:${b}`);
-        }
-      }
       if (draft.lbBrightness !== config.lbBrightness)
         await cmd(`SLBB ${draft.lbBrightness}`);
       if (draft.lbTimeout !== config.lbTimeout)
         await cmd(`SLBT ${draft.lbTimeout}`);
-      if (draft.lbColorMode !== config.lbColorMode)
-        await cmd(`SLCM ${draft.lbColorMode}`);
       if (draft.pinEnabled !== config.pinEnabled)
         await cmd(`SLPM ${draft.pinEnabled ? 1 : 0}`);
       if (draft.pin !== config.pin)
@@ -109,18 +97,6 @@ export default function SettingsPanel({ config, setConfig }) {
         <HR />
         <SectionHead>Lightbar</SectionHead>
         <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:20 }}>
-          <FieldRow label="State">
-            <Toggle value={draft.lbOn} onChange={v=>upd("lbOn",v)} />
-            <span style={{ fontSize:12,color:C.mid }}>{draft.lbOn?"On":"Off"}</span>
-          </FieldRow>
-          <FieldRow label="Color" hint="SLC -- keepalive req. every ~5 s">
-            <input type="color" value={draft.lbColor} onChange={e=>upd("lbColor",e.target.value)} style={{ width:40,height:28,padding:2 }} />
-            <span style={{ fontFamily:MONO,fontSize:11,color:draft.lbColor }}>{draft.lbColor}</span>
-            {["#ff2020","#3ddc6e","#4a90ff","#ffcc00","#ff8800","#ffffff"].map(col=>(
-              <div key={col} onClick={()=>upd("lbColor",col)} style={{ width:16,height:16,borderRadius:2,background:col,cursor:"pointer",
-                outline:draft.lbColor===col?`2px solid ${C.text}`:"2px solid transparent",outlineOffset:1 }} />
-            ))}
-          </FieldRow>
           <FieldRow label="Brightness" hint="SLBB  0-10">
             <input type="range" min={1} max={10} value={draft.lbBrightness} onChange={e=>upd("lbBrightness",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
             <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:24 }}>{draft.lbBrightness}</span>
@@ -128,10 +104,6 @@ export default function SettingsPanel({ config, setConfig }) {
           <FieldRow label="Timeout" hint="SLBT  10-600 s">
             <input type="range" min={10} max={600} step={10} value={draft.lbTimeout} onChange={e=>upd("lbTimeout",Number(e.target.value))} style={{ flex:1,maxWidth:160 }} />
             <span style={{ fontFamily:MONO,fontSize:12,color:C.mono,minWidth:36 }}>{draft.lbTimeout}s</span>
-          </FieldRow>
-          <FieldRow label="Mode" hint="SLCM">
-            <Btn small active={draft.lbColorMode===0} onClick={()=>upd("lbColorMode",0)}>0 -- Static</Btn>
-            <Btn small active={draft.lbColorMode===1} onClick={()=>upd("lbColorMode",1)}>1 -- Unknown</Btn>
           </FieldRow>
         </div>
         <HR />
