@@ -1,17 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
-import sys
+import sys, importlib.util
 from pathlib import Path
 
 block_cipher = None
+
+# Resolve async_timeout location at build time
+_at_spec = importlib.util.find_spec("async_timeout")
+_at_path = str(Path(_at_spec.origin).parent) if _at_spec and _at_spec.origin else None
+
+_datas = [("frontend/dist", "frontend/dist")]
+if _at_path:
+    _datas.append((_at_path, "async_timeout"))
 
 a = Analysis(
     ["backend/launch.py"],
     pathex=["backend"],
     binaries=[],
-    datas=[
-        ("frontend/dist", "frontend/dist"),
-        ("/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages/async_timeout", "async_timeout"),
-    ],
+    datas=_datas,
     hiddenimports=[
         "webview",
         "webview.platforms.cocoa",
