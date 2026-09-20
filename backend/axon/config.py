@@ -23,6 +23,7 @@ ws_clients: dict[str, set] = defaultdict(set)
 
 # mDNS service types to browse (try both; one will be right)
 MDNS_SERVICE_TYPES = [
+    "_attero-ad._udp.local.",
     "_attero._udp.local.",
     "_axon._udp.local.",
     "_http._tcp.local.",   # fallback -- some firmware versions use this

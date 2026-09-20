@@ -2,7 +2,7 @@
 axon/discovery.py -- device discovery and registry.
 
 Two parallel strategies run at startup and on-demand:
-  1. mDNS browse for _attero._udp.local (C1 native advertisement)
+  1. mDNS browse for _attero-ad._udp.local (C1 native advertisement)
   2. UDP broadcast QUERY on 49494 -- catches anything mDNS misses
 
 Also contains the device registry helper (_register_device) and the
@@ -48,12 +48,16 @@ def parse_query_response(resp: str) -> dict:
 def register_device(ip: str, info: dict | None = None):
     """Add or update a device in the registry and broadcast to all WS clients."""
     existing = devices.get(ip, {})
-    devices[ip] = {
+    merged = {
         "ip":        ip,
         "sv_values": existing.get("sv_values", {}),
         "sm_values": existing.get("sm_values", {}),
         **(info or {}),
     }
+    # Never let a broadcast registration overwrite a name already set by mDNS
+    if existing.get("name") and not (info or {}).get("name"):
+        merged["name"] = existing["name"]
+    devices[ip] = merged
     log.info("Device registered: %s  %s", ip, info or "")
     asyncio.ensure_future(broadcast_all({"type": "device_found", "device": devices[ip]}))
 
@@ -69,20 +73,23 @@ class _MDNSListener:
         self._azc = azc
 
     def async_update_service(self, zc, stype, name):
-        pass  # don't care about updates
+        log.info("mDNS UPDATE: stype=%s name=%s", stype, name)
+        asyncio.ensure_future(self._resolve(stype, name, event="update"))
 
     def async_remove_service(self, zc, stype, name):
-        log.info("mDNS remove: %s", name)
+        log.info("mDNS REMOVE: stype=%s name=%s", stype, name)
 
     def async_add_service(self, zc, stype, name):
-        asyncio.ensure_future(self._resolve(stype, name))
+        log.info("mDNS ADD: stype=%s name=%s", stype, name)
+        asyncio.ensure_future(self._resolve(stype, name, event="add"))
 
     # zeroconf calls these without 'async_' prefix too in older builds
     update_service = async_update_service
     remove_service = async_remove_service
     add_service    = async_add_service
 
-    async def _resolve(self, stype: str, name: str):
+    async def _resolve(self, stype: str, name: str, event: str = "add"):
+        log.info("mDNS resolving: %s (event=%s)", name, event)
         info = AsyncServiceInfo(stype, name)
         ok   = await info.async_request(self._azc.zeroconf, timeout=3000)
         if not ok:
@@ -90,6 +97,7 @@ class _MDNSListener:
             return
 
         addrs = info.parsed_addresses()
+        log.info("mDNS resolved: %s -> addrs=%s", name, addrs)
         if not addrs:
             return
         ip = addrs[0]
@@ -100,22 +108,35 @@ class _MDNSListener:
         except Exception:
             pass
 
-        # Only register Axon C1 devices (CtrlType=AtteroUDP, Model=AxonC1)
-        ctrl_type = props.get("CtrlType", "")
-        model     = props.get("Model", "")
-        if ctrl_type != "AtteroUDP" and "Axon" not in name and "Axon" not in model:
-            log.debug("mDNS: ignoring non-Axon service %s (CtrlType=%s)", name, ctrl_type)
+        log.info("mDNS props for %s: %s", name, props)
+
+        # Accept if CtrlType contains AtteroUDP, or service type is a known Attero type
+        ctrl_type = props.get("CtrlType", "").strip("\x00").strip()
+        attero_stypes = {"_attero-ad._udp.local.", "_attero._udp.local.", "_axon._udp.local."}
+        is_attero = "AtteroUDP" in ctrl_type or stype in attero_stypes
+        if not is_attero:
+            log.info("mDNS: ignoring non-Attero service %s (CtrlType=%r stype=%s)", name, ctrl_type, stype)
             return
 
-        device_name = name.split(".")[0]  # "AxonC1-XXYYZZ"
+        device_name = name.split(".")[0]
+        old_name = devices.get(ip, {}).get("name")
+        log.info("mDNS: registering %s ip=%s old_name=%r new_name=%r", name, ip, old_name, device_name)
         register_device(ip, {
             "source":     "mdns",
             "name":       device_name,
             "mdns_name":  name,
             "mdns_props": props,
         })
-        # Run full sync on discovery
-        asyncio.ensure_future(auto_sync(ip))
+        if old_name and old_name != device_name:
+            log.info("mDNS: device %s renamed %r -> %r", ip, old_name, device_name)
+            asyncio.ensure_future(broadcast_all({
+                "type":      "device_renamed",
+                "device_ip": ip,
+                "name":      device_name,
+            }))
+        elif not old_name:
+            # First time we have a name — run full sync
+            asyncio.ensure_future(auto_sync(ip))
 
 
 _mdns_browsers: list = []
@@ -131,6 +152,7 @@ async def start_mdns_discovery():
         browser = AsyncServiceBrowser(_azc.zeroconf, stype, listener=listener)
         _mdns_browsers.append(browser)
         log.info("mDNS browser started for %s", stype)
+
 
 
 async def stop_mdns_discovery():

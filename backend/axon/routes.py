@@ -96,17 +96,23 @@ async def api_sync(req: web.Request) -> web.Response:
         asyncio.run_coroutine_threadsafe(
             broadcast_all({"type": "sync_log", "device_ip": ip, "msg": msg}), loop)
 
-    result = await loop.run_in_executor(None, blocking_sync, ip, progress)
+    dev = devices.get(ip, {})
+    mdns_name = dev.get("name") or dev.get("frontend_config", {}).get("deviceName") or None
+    log.info("sync %s: device registry=%s mdns_name=%r", ip, {k: v for k, v in dev.items() if k not in ("sv_values", "sm_values", "frontend_config", "mdns_props")}, mdns_name)
+    result = await loop.run_in_executor(None, blocking_sync, ip, progress, mdns_name)
 
     if result["ok"] and result.get("config"):
         cfg        = result["config"]
         sv_to_slot = cfg.pop("svToSlot", {})
         slot_to_sv = cfg.pop("slotToSV", {})
-        devices.setdefault(ip, {}).update({
+        update = {
             "sv_to_slot": {int(k): v for k, v in sv_to_slot.items()},
             "slot_to_sv": {int(k): v for k, v in slot_to_sv.items()},
             "synced": True,
-        })
+        }
+        if cfg.get("deviceName"):
+            update["name"] = cfg["deviceName"]
+        devices.setdefault(ip, {}).update(update)
         await broadcast_all({
             "type":      "device_synced",
             "device_ip": ip,
@@ -212,7 +218,7 @@ async def api_cfg_export(req: web.Request) -> web.Response:
         xml_bytes = frontend_to_cfg(cfg, firmware_ver=fw)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
-    name = cfg.get("deviceName") or dev.get("name") or f"AxonC1-{ip.replace('.', '_')}"
+    name = cfg.get("deviceName") or dev.get("name") or ""
     return web.Response(
         body=xml_bytes,
         content_type="application/xml",
