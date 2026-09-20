@@ -4,7 +4,9 @@ import { Btn, Tag, FieldRow } from "./Primitives.jsx";
 import TreeItem from "./TreeItem.jsx";
 import LevelConfigPanel from "./LevelConfigPanel.jsx";
 import TriggerConfigPanel from "./TriggerConfigPanel.jsx";
-import { mkLevelEntry, mkTriggerEntry, mkMenuEntry } from "../defaultData.js";
+import { mkLevelEntry, mkTriggerEntry, mkMenuEntry, mkStartupSync, mkStartupMacro } from "../defaultData.js";
+import StartupSyncPanel from "./StartupSyncPanel.jsx";
+import StartupMacroPanel from "./StartupMacroPanel.jsx";
 
 export default function MenuBuilder({ config, setConfig, onSimCursorChange, simState, navState, navigate: navigate_ }) {
   const view    = navState?.view ?? "root";
@@ -228,6 +230,28 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
     return () => window.removeEventListener("keydown", onKey);
   }, [selected, selectedIds, currentNode]);
 
+  // Count total menu IDs: every node in the tree (root container + D1 menus + leaves)
+  const totalMenuIds = useMemo(() => {
+    // Count IDs that come from the 64-slot pool.
+    // System IDs (0xFFFF top-menu, 0xFFFE vol/mute, 0xFFFD sync, 0xFFFB macro) each consume 1 slot.
+    // User content nodes (submenus, levels, actions) inside mainMenu.entries also each consume 1 slot.
+    // The mainMenu root container itself IS 0xFFFF — counted separately below, not via walk.
+    let count = 0;
+    const walk = (node) => {
+      count++;
+      (node.entries || []).forEach(walk);
+    };
+    (config.mainMenu.entries || []).forEach(walk);  // user content only (excludes 0xFFFF root)
+    count++;  // 0xFFFF top-menu always present
+    if (config.volMuteEnabled) count++;             // 0xFFFE
+    if (config.startupSyncEnabled) count++;         // 0xFFFD
+    if (config.startupMacroEnabled) count++;        // 0xFFFB
+    return count;
+  }, [config.mainMenu, config.volMuteEnabled, config.startupSyncEnabled, config.startupMacroEnabled]);
+  const ID_MAX = 64;
+  const idWarning = totalMenuIds >= ID_MAX;
+  const idCaution = totalMenuIds >= ID_MAX - 5;
+
   const reorder = (fromId, toId) => {
     if (fromId === toId) return;
     const targetId = currentNode.id;
@@ -277,7 +301,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
           <div style={{ flex:1, padding:"0 12px", background:C.s1, display:"flex",
             alignItems:"center", gap:8, height:"100%", overflow:"hidden" }}>
             {!showRoot && navPath.length === 0 && editingName === "__mainmenu__" ? (
-              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value)}
+              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value.slice(0,16))} maxLength={16}
                 onBlur={() => { setConfig(c=>({...c,mainMenu:{...c.mainMenu,display_txt:nameVal}})); setEditingName(null); }}
                 onKeyDown={e => {
                   if (e.key==="Enter") { setConfig(c=>({...c,mainMenu:{...c.mainMenu,display_txt:nameVal}})); setEditingName(null); }
@@ -287,7 +311,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                   fontSize:12, fontWeight:600, color:C.text, fontFamily:SANS }}
               />
             ) : !showRoot && navPath.length > 0 && editingName === "__currentmenu__" ? (
-              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value)}
+              <input autoFocus value={nameVal} onChange={e => setNameVal(e.target.value.slice(0,16))} maxLength={16}
                 onBlur={() => { updateEntry({...currentNode, display_txt: nameVal}); setEditingName(null); }}
                 onKeyDown={e => {
                   if (e.key==="Enter") { updateEntry({...currentNode, display_txt: nameVal}); setEditingName(null); }
@@ -304,14 +328,14 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
                 onDoubleClick={() => {
                   if (!showRoot && navPath.length === 0) {
                     setEditingName("__mainmenu__");
-                    setNameVal(config.mainMenu.display_txt || "MAIN MENU");
+                    setNameVal(config.mainMenu.display_txt || "");
                   } else if (!showRoot && navPath.length > 0) {
                     setEditingName("__currentmenu__");
                     setNameVal(currentNode.display_txt || "");
                   }
                 }}
               >
-                {showRoot ? "Root" : navPath.length === 0 ? (config.mainMenu.display_txt || "MAIN MENU") : navPath[navPath.length-1].label}
+                {showRoot ? "Root" : navPath.length === 0 ? (config.mainMenu.display_txt || "") : navPath[navPath.length-1].label}
               </span>
             )}
             {/* Depth squares inline */}
@@ -339,7 +363,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
           <button onClick={() => {
             if (!showRoot && navPath.length === 0) {
               setEditingName("__mainmenu__");
-              setNameVal(config.mainMenu.display_txt || "MAIN MENU");
+              setNameVal(config.mainMenu.display_txt || "");
             } else if (selected) {
               startEdit({stopPropagation:()=>{}}, selected);
             }
@@ -392,6 +416,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
             <div style={{
               display:"flex", alignItems:"center", height:34, width:"100%",
               background:"transparent", cursor:"pointer", transition:"background .08s",
+              borderLeft:"3px solid transparent",
               borderBottom:`1px solid ${C.border}22`,
             }}
               onClick={e=>{ if(config.menuEnabled) navigate(null); }}
@@ -420,6 +445,84 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               <span style={{ fontSize:9, color:config.menuEnabled ? C.dim : C.border, paddingRight:8 }}>{'>'}</span>
             </div>
           )}
+          {showRoot && (() => {
+            const syncEnabled = config.startupSyncEnabled ?? !!config.startupSync;
+            const sel = effectiveSelected?.id === "__startupSync__";
+            const sync = config.startupSync ?? mkStartupSync(config.devices[0]?.name || "");
+            return (
+              <div style={{
+                display:"flex", alignItems:"center", height:34, width:"100%",
+                background: sel ? `${C.blue}15` : "transparent",
+                borderLeft: sel ? `3px solid ${C.blue}` : "3px solid transparent",
+                cursor:"pointer", transition:"background .08s",
+                borderBottom:`1px solid ${C.border}18`,
+              }}
+                onClick={() => setSelected({ id:"__startupSync__", entry_type:"_startup_sync", ...sync })}
+                onMouseEnter={e=>{ if(!sel) e.currentTarget.style.background=C.s2; }}
+                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="transparent"; }}
+              >
+                <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
+                  <input type="checkbox" checked={syncEnabled}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => {
+                      e.stopPropagation();
+                      setConfig(c => ({
+                        ...c,
+                        startupSyncEnabled: e.target.checked,
+                        startupSync: c.startupSync ?? mkStartupSync(c.devices[0]?.name || ""),
+                      }));
+                    }}
+                    style={{ width:13, height:13, cursor:"pointer" }} />
+                </span>
+                <span style={{ fontSize:11, color:C.blue, minWidth:18, textAlign:"center" }}>&#8635;</span>
+                <span style={{ flex:1, fontSize:12, color:syncEnabled ? C.text : C.dim, paddingLeft:6,
+                  overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
+                  Startup Synchronization
+                </span>
+                <span style={{ fontSize:9, color:C.dim, paddingRight:8, fontFamily:"monospace" }}>sync</span>
+              </div>
+            );
+          })()}
+          {showRoot && (() => {
+            const macroEnabled = config.startupMacroEnabled ?? !!config.startupMacro;
+            const sel = effectiveSelected?.id === "__startupMacro__";
+            const macro = config.startupMacro ?? mkStartupMacro(config.devices[0]?.name || "");
+            return (
+              <div style={{
+                display:"flex", alignItems:"center", height:34, width:"100%",
+                background: sel ? `${C.blue}15` : "transparent",
+                borderLeft: sel ? `3px solid ${C.blue}` : "3px solid transparent",
+                cursor:"pointer", transition:"background .08s",
+                borderBottom:`1px solid ${C.border}18`,
+              }}
+                onClick={() => setSelected({ id:"__startupMacro__", entry_type:"_startup_macro", ...macro })}
+                onMouseEnter={e=>{ if(!sel) e.currentTarget.style.background=C.s2; }}
+                onMouseLeave={e=>{ if(!sel) e.currentTarget.style.background="transparent"; }}
+              >
+                <span style={{ minWidth:32, paddingLeft:10, paddingRight:6 }}>
+                  <input type="checkbox" checked={macroEnabled}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => {
+                      e.stopPropagation();
+                      setConfig(c => ({
+                        ...c,
+                        startupMacroEnabled: e.target.checked,
+                        startupMacro: c.startupMacro ?? mkStartupMacro(c.devices[0]?.name || ""),
+                      }));
+                    }}
+                    style={{ width:13, height:13, cursor:"pointer" }} />
+                </span>
+                <span style={{ fontSize:11, color:C.blue, minWidth:18, textAlign:"center" }}>&#9654;</span>
+                <span style={{ flex:1, fontSize:12, color:macroEnabled ? C.text : C.dim, paddingLeft:6,
+                  overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>
+                  Initialization Macro
+                </span>
+                <span style={{ fontSize:9, color:C.dim, paddingRight:8, fontFamily:"monospace" }}>
+                  {(config.startupMacro?.actions?.length ?? 0)} actions
+                </span>
+              </div>
+            );
+          })()}
           {!showRoot && entries.map((entry,i)=>{
             const isSelected   = selectedIds.has(entry.id) || effectiveSelected?.id === entry.id;
             const isDropTarget = dragOver === entry.id;
@@ -439,7 +542,7 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               }}>
               {editingName===entry.id ? (
                 <div style={{ padding:"4px 8px",display:"flex",gap:6 }}>
-                  <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value)}
+                  <input autoFocus value={nameVal} onChange={e=>setNameVal(e.target.value.slice(0,16))} maxLength={16}
                     onBlur={()=>commitEdit(entry)} onKeyDown={e=>{ if(e.key==="Enter")commitEdit(entry); if(e.key==="Escape")setEditingName(null); }}
                     style={{ flex:1,height:24 }} />
                 </div>
@@ -501,6 +604,34 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
 
           return (
             <div style={{ borderTop:`1px solid ${C.border}`, flexShrink:0 }}>
+              {/* ID budget counter */}
+              <div style={{
+                padding:"4px 12px", borderBottom:`1px solid ${C.border}`,
+                display:"flex", alignItems:"center", gap:6,
+              }}>
+                <span style={{ fontSize:10, color:C.dim, flex:1 }}>Menu IDs</span>
+                <span style={{
+                  fontSize:10, fontFamily:"monospace",
+                  color: idWarning ? C.warn : idCaution ? C.orange : C.dim,
+                  fontWeight: idCaution ? 600 : 400,
+                }}>
+                  {totalMenuIds}/{ID_MAX}
+                </span>
+                {idWarning && (
+                  <span style={{ fontSize:9, color:C.warn, fontWeight:600 }}>LIMIT</span>
+                )}
+                <div style={{
+                  width:60, height:4, borderRadius:2,
+                  background:C.s3, overflow:"hidden",
+                }}>
+                  <div style={{
+                    width:`${Math.min(100, (totalMenuIds/ID_MAX)*100)}%`,
+                    height:"100%", borderRadius:2,
+                    background: idWarning ? C.warn : idCaution ? C.orange : C.sage,
+                    transition:"width .2s",
+                  }} />
+                </div>
+              </div>
               <div style={{ padding:"8px 12px 6px", borderBottom:`1px solid ${C.border}` }}>
                 <div style={{ fontSize:10, color:C.dim, letterSpacing:"0.08em",
                   textTransform:"uppercase", marginBottom:6 }}>Containers</div>
@@ -592,8 +723,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               <Tag color="blue">Level</Tag>
               <div style={{ marginLeft:"auto" }}>
                 <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value})}
-                  style={{ width:180,fontSize:13,fontWeight:500 }} />
+                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
+                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
               </div>
             </div>
             <LevelConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
@@ -606,8 +737,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               <Tag color="green">Trigger</Tag>
               <div style={{ marginLeft:"auto" }}>
                 <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value})}
-                  style={{ width:180,fontSize:13,fontWeight:500 }} />
+                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
+                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
               </div>
             </div>
             <TriggerConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
@@ -620,13 +751,39 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               <Tag color="orange">Menu container</Tag>
             </div>
             <FieldRow label="Name">
-              <input value={selected.display_txt} onChange={e=>updateEntry({...selected,display_txt:e.target.value})} style={{ maxWidth:220 }} />
+              <input value={selected.display_txt} onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})} maxLength={16} style={{ maxWidth:220 }} />
             </FieldRow>
             <FieldRow label="Children"><Tag color="dim">{selected.entries?.length||0} items</Tag></FieldRow>
             <div style={{ marginTop:8 }}>
               <Btn onClick={()=>navigate(selected)}>Open in builder</Btn>
             </div>
           </div>
+        )}
+        {selected?.entry_type==="_startup_sync" && (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+              <span style={{ fontSize:14, fontWeight:600, color:C.text }}>Startup Synchronization</span>
+              <Tag color="blue">Sync</Tag>
+            </div>
+            <StartupSyncPanel
+              sync={config.startupSync ?? { ...selected }}
+              devices={devices}
+              onChange={v => setConfig(c => ({ ...c, startupSync: v }))}
+            />
+          </>
+        )}
+        {selected?.entry_type==="_startup_macro" && (
+          <>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+              <span style={{ fontSize:14, fontWeight:600, color:C.text }}>Initialization Macro</span>
+              <Tag color="blue">Macro</Tag>
+            </div>
+            <StartupMacroPanel
+              macro={config.startupMacro ?? { ...selected }}
+              devices={devices}
+              onChange={v => setConfig(c => ({ ...c, startupMacro: v }))}
+            />
+          </>
         )}
         {selected?.id===config.volMuteScreen.id && (
           <>
@@ -635,8 +792,8 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
               <Tag color="blue">Root level</Tag>
               <div style={{ marginLeft:"auto" }}>
                 <input value={selected.display_txt}
-                  onChange={e=>updateEntry({...selected,display_txt:e.target.value})}
-                  style={{ width:180,fontSize:13,fontWeight:500 }} />
+                  onChange={e=>updateEntry({...selected,display_txt:e.target.value.slice(0,16)})}
+                  maxLength={16} style={{ width:180,fontSize:13,fontWeight:500 }} />
               </div>
             </div>
             <LevelConfigPanel entry={selected} devices={devices} onChange={updateEntry} />
