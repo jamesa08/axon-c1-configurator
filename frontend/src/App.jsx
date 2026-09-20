@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { LayoutGrid, Settings, Upload, RefreshCw, Plus, ChevronLeft, ChevronRight, ArrowUp, Loader, ChevronUp, ChevronDown } from "lucide-react";
-import { C, MONO, SANS, G } from "./tokens.js";
+import { LayoutGrid, Settings, Upload, RefreshCw, Plus, ChevronLeft, ChevronRight, ArrowUp, Loader, ChevronUp, ChevronDown, Home } from "lucide-react";
+import { C, SANS, G } from "./tokens.js";
 import { addLog } from "./helpers.js";
 import { mkDefaultConfig, mkDevice } from "./defaultData.js";
 import C1Sim from "./components/C1Sim.jsx";
@@ -11,6 +11,8 @@ import PushPanel from "./components/PushPanel.jsx";
 import LogPanel from "./components/LogPanel.jsx";
 import NicPicker from "./components/NicPicker.jsx";
 import { SbSection, SbNavRow, SbDeviceRow, SbUnitRow, SbAddRow } from "./components/Sidebar.jsx";
+import { Btn } from "./components/Primitives.jsx";
+import AxonLogo from "./components/AxonLogo.jsx";
 
 // --- C1 unit helpers ----------------------------------------------------------
 const mkC1 = (name, ip) => ({ id: crypto.randomUUID(), name, ip, mac:"--", firmware:"--", online:false, config: mkDefaultConfig() });
@@ -78,10 +80,16 @@ export default function App() {
   const [c1List, setC1List]         = useState([]);
   const [selectedC1, setSelectedC1] = useState(null);
   const [syncing, setSyncing]       = useState(false);
-  const [tab, setTab]               = useState("builder");
+  const [tab, setTab]               = useState("home");
   const pushRunRef                  = useRef(null);
-  const blockNextSyncRef            = useRef(false); // set true after failed push to suppress config overwrite
+  const blockNextSyncRef            = useRef(false);
   const [navState, setNavState] = useState({ view:"root", path:[] });
+  const [pickingC1, setPickingC1] = useState(false);
+
+  // Inline "Add by IP" state (replaces prompt())
+  const [showAddIp, setShowAddIp] = useState(false);
+  const [addIpVal, setAddIpVal]   = useState("");
+  const addIpRef                  = useRef(null);
 
   const navigate = useCallback((action) => {
     setNavState(prev => {
@@ -109,12 +117,6 @@ export default function App() {
     const s = document.createElement("style");
     s.textContent = G;
     document.head.appendChild(s);
-
-    // Grain overlay
-    const grain = document.createElement("style");
-    const svgNoise = `<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23g)' opacity='1'/></svg>`;
-    grain.textContent = `body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;opacity:0.03;background-image:url("data:image/svg+xml,${encodeURIComponent(svgNoise)}")}`;
-    document.head.appendChild(grain);
 
     addLog("INFO","Configurator ready.");
     const initialIp = c1List[0]?.config?.ip;
@@ -180,7 +182,7 @@ export default function App() {
     };
     connectWS(c1List[0]?.config?.ip);
 
-    return()=>{ document.head.removeChild(s); document.head.removeChild(grain); if(ws) ws.close(); };
+    return()=>{ document.head.removeChild(s); if(ws) ws.close(); };
   },[]);
 
   const _c1Found = (selectedC1 && c1List.find(d=>d.id===selectedC1)) || c1List[0] || null;
@@ -233,6 +235,13 @@ export default function App() {
     } finally {
       setScanning(false);
     }
+  };
+
+  const doAddByIp = () => {
+    const ip = addIpVal.trim();
+    if (ip) addC1(ip);
+    setAddIpVal("");
+    setShowAddIp(false);
   };
 
   // Discovery WebSocket with auto-reconnect
@@ -389,7 +398,7 @@ export default function App() {
       <div style={{ width:"100%",display:"flex",flexDirection:"column",gap:10 }}>
         {/* Faders */}
         <div>
-          <div style={{ fontSize:9.5,color:C.dim,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,paddingTop:4,borderTop:`1px solid ${C.border}` }}>Faders</div>
+          <div style={{ fontSize:11,fontWeight:600,color:C.dim,letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:8,paddingTop:4,borderTop:`1px solid ${C.border}` }}>Faders</div>
           <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:5 }}>
             <span style={{ fontSize:11,color:C.mid,minWidth:72,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
               {cfg.volMuteScreen.display_txt || "Zone"}
@@ -397,7 +406,7 @@ export default function App() {
             <input type="range" min={-100} max={20} value={cfg.simVol}
               onChange={e=>{ const v=Number(e.target.value); setC1Config(c=>({...c,simVol:v})); addLog("SV",`SV 1 ${v}`); }}
               style={{ flex:1 }} />
-            <span style={{ fontFamily:MONO,fontSize:10,color:C.mono,minWidth:36,textAlign:"right",flexShrink:0 }}>
+            <span style={{ fontFamily:SANS,fontSize:10,color:C.mono,minWidth:36,textAlign:"right",flexShrink:0 }}>
               {cfg.simVol>0?`+${cfg.simVol}`:cfg.simVol}
             </span>
           </div>
@@ -423,7 +432,7 @@ export default function App() {
                       addLog("SV", `SV ${lv.level_vol?.channel ?? i+2} ${v}  (${lv.display_txt})`);
                     }}
                     style={{ flex:1 }} />
-                  <span style={{ fontFamily:MONO,fontSize:10,color:C.mono,minWidth:36,textAlign:"right",flexShrink:0 }}>
+                  <span style={{ fontFamily:SANS,fontSize:10,color:C.mono,minWidth:36,textAlign:"right",flexShrink:0 }}>
                     {chVol>0?`+${chVol}`:chVol}
                   </span>
                 </div>
@@ -438,7 +447,7 @@ export default function App() {
           walk(cfg.mainMenu);
           return trigs.length > 0 ? (
             <div>
-              <div style={{ fontSize:9.5,color:C.dim,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,paddingTop:4,borderTop:`1px solid ${C.border}` }}>Triggers</div>
+              <div style={{ fontSize:11,fontWeight:600,color:C.dim,letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:8,paddingTop:4,borderTop:`1px solid ${C.border}` }}>Triggers</div>
               <div style={{ display:"flex",flexWrap:"wrap",gap:4 }}>
                 {trigs.map(t => (
                   <button key={t.id}
@@ -470,6 +479,16 @@ export default function App() {
 
   const [selectedDevice, setSelectedDevice] = useState(cfg.devices[0]?.name ?? null);
 
+  const openConfig = () => {
+    if (c1List.length === 0) return;
+    if (c1List.length === 1) {
+      setSelectedC1(c1List[0].id);
+      setTab("push");
+    } else {
+      setPickingC1(true);
+    }
+  };
+
   const breadcrumb = (() => {
     if (tab !== "builder") return null;
     if (navState.view === "root") return null;
@@ -478,6 +497,13 @@ export default function App() {
     return [{ label: mmLabel }, ...navState.path.map(s=>({ label:s.label }))];
   })();
 
+  const tabLabel = {
+    builder:  "Menu Builder",
+    devices:  "3rd Party Devices",
+    settings: "Device Settings",
+    push:     "Push to Device",
+  }[tab] || "";
+
   return (
     <div style={{ display:"flex", height:"100vh", overflow:"hidden", fontFamily:SANS, background:C.bg }}>
 
@@ -485,70 +511,149 @@ export default function App() {
       {noDevices && (
         <div style={{ position:"absolute", inset:0, display:"flex", zIndex:10, background:C.bg }}>
           <div style={{
-            width:216, flexShrink:0, background:C.s0, borderRight:`1px solid ${C.border}`,
+            width:216, flexShrink:0,
+            background:"linear-gradient(to bottom,#eaeaef 0%,#e2e2e8 100%)",
+            borderRight:`1px solid rgba(0,0,0,0.18)`,
             display:"flex", flexDirection:"column",
           }}>
-            <div style={{ padding:"16px 14px 12px", borderBottom:`1px solid ${C.border}` }}>
-              <div style={{ fontSize:13, fontWeight:600, color:C.text }}>Axon C1</div>
-              <div style={{ fontSize:10, color:C.dim, marginTop:2, fontFamily:MONO }}>configurator</div>
+            <div style={{
+              height:52, borderBottom:"1px solid #444",
+              display:"flex", flexDirection:"row", justifyContent:"center", alignItems:"center", gap:10,
+              background:"linear-gradient(to bottom,#e9e9e9 0%,#bbbabb 100%)",
+              boxShadow:"0 0 10px #141414", flexShrink:0,
+              padding:"0 14px",
+            }}>
+              <AxonLogo scale={0.8} />
+              <div style={{ fontSize:18, color:"#1a1a1a", fontFamily:SANS, fontWeight:300, letterSpacing:"0.02em", lineHeight:1, textShadow:"0 1px 1px rgba(255,255,255,0.6)" }}>configurator</div>
             </div>
             <div style={{ flex:1, display:"flex", flexDirection:"column", padding:"16px 14px", gap:10 }}>
               <div style={{ fontSize:11, color:C.dim, marginBottom:4 }}>No devices found yet.</div>
+            </div>
+            {/* Bottom bar — controls for discovery, outside the list body */}
+            <div style={{ borderTop:`1px solid ${C.border}`, padding:"8px 10px", flexShrink:0, display:"flex", flexDirection:"column", gap:6 }}>
+              {showAddIp && (
+                <div style={{ display:"flex", gap:4 }}>
+                  <input
+                    ref={addIpRef}
+                    autoFocus
+                    value={addIpVal}
+                    onChange={e=>setAddIpVal(e.target.value)}
+                    onKeyDown={e=>{ if(e.key==="Enter") doAddByIp(); if(e.key==="Escape"){ setShowAddIp(false); setAddIpVal(""); } }}
+                    placeholder="e.g. 192.168.1.100"
+                    style={{ flex:1, fontSize:11, height:24 }}
+                  />
+                  <Btn small variant="primary" onClick={doAddByIp}>Add</Btn>
+                  <Btn small onClick={()=>{ setShowAddIp(false); setAddIpVal(""); }}>×</Btn>
+                </div>
+              )}
+              <div style={{ display:"flex", gap:4 }}>
+                <Btn small disabled={scanning} onClick={doScan} style={{ flex:1, justifyContent:"center" }}>
+                  {scanning ? <Loader size={11} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={11} />}
+                  {scanning ? "Scanning…" : "Scan Network"}
+                </Btn>
+                <Btn small active={showAddIp} onClick={()=>{ setShowAddIp(v=>!v); setAddIpVal(""); }} title="Add by IP" style={{ width:26, padding:0, justifyContent:"center", flexShrink:0 }}>
+                  <Plus size={12} />
+                </Btn>
+              </div>
               <div>
-                <div style={{ fontSize:10, color:C.dim, marginBottom:4 }}>Host NIC</div>
+                <div style={{ fontSize:10, color:C.dim, marginBottom:3 }}>Network Interface</div>
                 <NicPicker value={scanNic} onChange={setScanNic} compact />
               </div>
-              <button onClick={doScan} disabled={scanning} style={{
-                height:28, borderRadius:4, border:`1px solid ${C.borderHi}`,
-                background:C.s1, color:scanning?C.accent:C.mid, fontFamily:SANS, fontSize:12,
-                cursor:scanning?"not-allowed":"pointer",
-              }} style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-                {scanning ? <Loader size={12} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
-                {scanning ? "Scanning..." : "Scan network"}
-              </button>
-              <button onClick={()=>{ const ip=prompt("Enter device IP:"); if(ip?.trim()) addC1(ip.trim()); }} style={{
-                height:28, borderRadius:4, border:`1px solid ${C.border}`,
-                background:C.s1, color:C.dim, fontFamily:SANS, fontSize:12, cursor:"pointer",
-                display:"flex", alignItems:"center", justifyContent:"center", gap:6,
-              }}><Plus size={12} />  Add by IP</button>
             </div>
           </div>
-          <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:12 }}>
-            <div style={{ fontSize:13, color:C.dim }}>{scanning ? "Scanning network..." : "Waiting for device discovery..."}</div>
-            <div style={{ fontSize:11, color:C.dim, opacity:.6 }}>Devices appear automatically via mDNS or broadcast scan.</div>
+          <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:64, padding:"0 48px" }}>
+
+            {/* Left: logo + welcome */}
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16, flexShrink:0 }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
+                <AxonLogo scale={2.2} />
+                <div style={{ fontSize:28, fontWeight:300, color:C.dim, fontFamily:SANS, letterSpacing:"0.02em", lineHeight:1, paddingLeft:41, marginTop:3 }}>configurator</div>
+              </div>
+              <div style={{ fontSize:28, fontWeight:300, color:C.text, fontFamily:SANS, letterSpacing:"-0.02em", marginTop:16 }}>Welcome.</div>
+            </div>
+
+            {/* Divider */}
+            <div style={{ width:1, height:160, background:C.border, flexShrink:0 }} />
+
+            {/* Right: steps + buttons */}
+            <div style={{ display:"flex", flexDirection:"column", gap:20, maxWidth:280 }}>
+              <div style={{ fontSize:15, fontWeight:500, color:C.text }}>Start in just 3 easy steps:</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {[
+                  { n:"1.", text:"Plug your Axon C1 into the network." },
+                  { n:"2.", text:"Select your Network Interface in the sidebar. This tells the app which adapter to scan." },
+                  { n:"3.", text:"Hit Scan and your device pops up automatically. That's it!" },
+                ].map(s => (
+                  <div key={s.n} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:C.dim, flexShrink:0, minWidth:16 }}>{s.n}</div>
+                    <div style={{ fontSize:13, color:C.mid, lineHeight:1.5 }}>{s.text}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:"flex", gap:8, marginTop:4 }}>
+                <Btn variant="primary" onClick={openConfig}>{c1List.length > 0 ? "Open Config" : "Open Config Offline"}</Btn>
+                <Btn onClick={() => {}}>Simulator Mode</Btn>
+              </div>
+              {showAddIp && (
+                <div style={{ display:"flex", gap:4 }}>
+                  <input
+                    ref={addIpRef} autoFocus value={addIpVal}
+                    onChange={e => setAddIpVal(e.target.value)}
+                    onKeyDown={e => { if(e.key==="Enter") doAddByIp(); if(e.key==="Escape"){ setShowAddIp(false); setAddIpVal(""); } }}
+                    placeholder="e.g. 192.168.1.100"
+                    style={{ flex:1, fontSize:12, height:28 }}
+                  />
+                  <Btn variant="primary" onClick={doAddByIp}>Add</Btn>
+                  <Btn onClick={() => { setShowAddIp(false); setAddIpVal(""); }}>×</Btn>
+                </div>
+              )}
+            </div>
+
+          </div>
+          <div style={{ position:"absolute", bottom:12, left:216, right:0, textAlign:"center", fontSize:10, color:C.dim, opacity:0.5, fontFamily:SANS, padding:"0 48px", lineHeight:1.6 }}>
+            This is an independent, community-built tool and is not affiliated with, endorsed by, or sponsored by Attero Tech, QSC, or any of their subsidiaries, partners, or related parties. All product names and trademarks are the property of their respective owners.
           </div>
         </div>
       )}
 
-      {/* APPLE-STYLE SIDEBAR */}
+      {/* SIDEBAR (source list) */}
       <div style={{
         width:216, flexShrink:0,
-        background:C.s0, borderRight:`1px solid ${C.border}`,
+        background:"linear-gradient(to bottom,#eaeaef 0%,#e2e2e8 100%)",
+        borderRight:`1px solid rgba(0,0,0,0.18)`,
         display:"flex", flexDirection:"column", overflow:"hidden",
       }}>
-        <div style={{ padding:"16px 14px 12px", borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
-          <div style={{ fontSize:13, fontWeight:600, color:C.text, letterSpacing:"-0.01em" }}>Axon C1</div>
-          <div style={{ fontSize:10, color:C.dim, marginTop:2, fontFamily:MONO, letterSpacing:"0.02em" }}>
-            configurator
-          </div>
+        <div style={{
+          height:52, borderBottom:"1px solid #444",
+          flexShrink:0, display:"flex", flexDirection:"row", justifyContent:"center", alignItems:"center", gap:10,
+          background:"linear-gradient(to bottom,#e9e9e9 0%,#bbbabb 100%)",
+          boxShadow:"0 0 10px #141414",
+          padding:"0 14px",
+        }}>
+          <AxonLogo scale={0.8} />
+          <div style={{ fontSize:18, color:"#1a1a1a", fontFamily:SANS, fontWeight:300, letterSpacing:"0.02em", lineHeight:1, textShadow:"0 1px 1px rgba(255,255,255,0.6)" }}>configurator</div>
         </div>
 
+        {/* Scrollable list body — source list proper */}
         <div style={{ flex:1, overflowY:"auto", padding:"6px 0" }}>
+          <div style={{ height:8 }} />
+          <SbNavRow icon={<Home size={14} />} label="Home" active={tab==="home"} onClick={()=>setTab("home")} />
           <SbSection>Configure</SbSection>
-          <SbNavRow icon={<LayoutGrid size={14} />} label="Menu builder"        active={tab==="builder"}  onClick={()=>setTab("builder")} />
-          <SbNavRow icon={<Settings size={14} />}    label="Device settings"     active={tab==="settings"} onClick={()=>setTab("settings")} />
-          <SbNavRow icon={<Upload size={14} />}      label="Push to device"      active={tab==="push"}     onClick={()=>setTab("push")} />
+          <SbNavRow icon={<LayoutGrid size={14} />} label="Menu Builder"        active={tab==="builder"}  onClick={()=>setTab("builder")} />
+          <SbNavRow icon={<Settings size={14} />}    label="Device Settings"     active={tab==="settings"} onClick={()=>setTab("settings")} />
+          <SbNavRow icon={<Upload size={14} />}      label="Push to Device"      active={tab==="push"}     onClick={()=>setTab("push")} />
 
-          <SbSection>3rd party devices</SbSection>
-          {cfg.devices.map(d => (
+          <SbSection>3rd Party Devices</SbSection>
+          {cfg.devices.map((d,i) => (
             <SbDeviceRow
               key={d.name}
               device={d}
+              index={i}
               active={selectedDevice === d.name && tab === "devices"}
               onClick={() => { setSelectedDevice(d.name); setTab("devices"); }}
             />
           ))}
-          <SbAddRow label="Add device" onClick={() => {
+          <SbAddRow label="Add Device" onClick={() => {
             const d = mkDevice("New Device", "10.0.0.1");
             setDevices(ds => [...ds, d]);
             setSelectedDevice(d.name);
@@ -556,113 +661,120 @@ export default function App() {
           }} />
 
           <SbSection>Units</SbSection>
-          <div style={{ padding:"4px 14px 6px", display:"flex", gap:6, alignItems:"center" }}>
-            <button onClick={doScan} disabled={scanning} style={{
-              flex:1, height:24, borderRadius:4, border:`1px solid ${scanning ? C.borderHi : C.border}`,
-              background: scanning ? C.s2 : C.s1, color: scanning ? C.accent : C.mid,
-              fontFamily:SANS, fontSize:11, cursor: scanning ? "not-allowed" : "pointer",
-              display:"flex", alignItems:"center", justifyContent:"center", gap:5,
-              transition:"all .12s",
-            }}>
-              {scanning ? <Loader size={11} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={11} />}
-              {scanning ? "Scanning..." : "Scan network"}
-            </button>
-            <button onClick={() => {
-              const ip = prompt("Enter device IP address:");
-              if (ip?.trim()) addC1(ip.trim());
-            }} style={{
-              width:24, height:24, borderRadius:4, border:`1px solid ${C.border}`,
-              background:C.s1, color:C.mid, fontFamily:SANS, fontSize:14,
-              cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
-            }} title="Add by IP"><Plus size={12} /></button>
-          </div>
-
-          <div style={{ padding:"2px 14px 6px" }}>
-            <div style={{ fontSize:9.5, color:C.dim, marginBottom:3, opacity:.7 }}>Host NIC</div>
-            <NicPicker value={scanNic} onChange={setScanNic} compact />
-          </div>
-
           {c1List.length === 0 && !scanning && (
             <div style={{ padding:"4px 14px 6px", fontSize:11, color:C.dim, lineHeight:1.8 }}>
-              No devices found yet.<br/>
-              <span style={{ fontSize:10, color:C.dim, opacity:.7 }}>Scan runs automatically on start.</span>
+              No devices found yet.
             </div>
           )}
-
-          {c1List.map(unit => (
+          {c1List.map((unit,i) => (
             <SbUnitRow
               key={unit.id}
               unit={unit}
+              index={i}
               active={selectedC1 === unit.id}
               onClick={() => { setSelectedC1(unit.id); syncDevice(unit.ip); }}
             />
           ))}
+        </div>
+
+        {/* Sidebar bottom bar — scan / add controls live here, not in the list body */}
+        <div style={{ borderTop:`1px solid ${C.border}`, padding:"8px 10px", flexShrink:0, display:"flex", flexDirection:"column", gap:6 }}>
+          {showAddIp && (
+            <div style={{ display:"flex", gap:4 }}>
+              <input
+                ref={addIpRef}
+                autoFocus
+                value={addIpVal}
+                onChange={e=>setAddIpVal(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter") doAddByIp(); if(e.key==="Escape"){ setShowAddIp(false); setAddIpVal(""); } }}
+                placeholder="e.g. 192.168.1.100"
+                style={{ flex:1, fontSize:11, height:24 }}
+              />
+              <Btn small variant="primary" onClick={doAddByIp}>Add</Btn>
+              <Btn small onClick={()=>{ setShowAddIp(false); setAddIpVal(""); }}>×</Btn>
+            </div>
+          )}
+          <div style={{ display:"flex", gap:4 }}>
+            <Btn small disabled={scanning} onClick={doScan} style={{ flex:1, justifyContent:"center" }}>
+              {scanning ? <Loader size={11} style={{ animation:"spin 1s linear infinite" }} /> : <RefreshCw size={11} />}
+              {scanning ? "Scanning…" : "Scan Network"}
+            </Btn>
+            <Btn small active={showAddIp} onClick={()=>{ setShowAddIp(v=>!v); setAddIpVal(""); }} title="Add by IP" style={{ width:26, padding:0, justifyContent:"center", flexShrink:0 }}>
+              <Plus size={12} />
+            </Btn>
+          </div>
+          <div>
+            <div style={{ fontSize:10, color:C.dim, marginBottom:3 }}>Network Interface</div>
+            <NicPicker value={scanNic} onChange={setScanNic} compact />
+          </div>
         </div>
       </div>
 
       {/* MAIN COLUMN */}
       <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0, position:"relative" }}>
 
-        {/* Context / breadcrumb bar */}
-        <div style={{
-          height:36, flexShrink:0,
-          borderBottom:`1px solid ${C.border}`, background:C.s0,
-          display:"flex", alignItems:"center", padding:"0 14px", gap:6,
+        {/* Toolbar / breadcrumb bar */}
+        {tab !== "home" && <div style={{
+          height:52, flexShrink:0,
+          borderBottom:"1px solid #444",
+          background:"linear-gradient(to bottom,#e9e9e9 0%,#bbbabb 100%)",
+          display:"flex", alignItems:"center", padding:"0 14px",
+          boxShadow:"0 0 10px #141414",
+          position:"relative",
         }}>
-          {breadcrumb ? (
-            <>
-              {navState.path.length > 0 && (
-                <button onClick={()=>navigate({ type:"POP" })} style={{
-                  background:"transparent", border:"none", color:C.dim,
-                  cursor:"pointer", padding:"0 4px 0 0", display:"flex", alignItems:"center",
-                }}><ChevronLeft size={14} /></button>
-              )}
-              {breadcrumb.map((b, i) => (
-                <span key={i} style={{ display:"flex", alignItems:"center", gap:6 }}>
-                  {i > 0 && <ChevronRight size={12} style={{ color:C.dim }} />}
-                  <span style={{
-                    fontSize:11, cursor: i < breadcrumb.length-1 ? "pointer" : "default",
-                    color: i === breadcrumb.length-1 ? C.text : C.dim,
-                    fontWeight: i === breadcrumb.length-1 ? 500 : 400,
-                  }}
-                    onClick={() => {
-                      if (i === 0) navigate({ type:"MENU" });
-                      else navigate({ type:"GOTO", path: navState.path.slice(0, i) });
-                    }}
-                  >{b.label}</span>
+          {/* Back button — left-anchored, only in breadcrumb mode */}
+          <div style={{ width:24, flexShrink:0 }}>
+            {breadcrumb && navState.path.length > 0 && (
+              <button onClick={()=>navigate({ type:"POP" })} style={{
+                background:"transparent", border:"none", color:C.dim,
+                cursor:"pointer", padding:0, display:"flex", alignItems:"center",
+              }}><ChevronLeft size={14} /></button>
+            )}
+          </div>
+
+          {/* Center label: "Device {name} - {title}" */}
+          <div style={{
+            position:"absolute", left:0, right:0, top:0, bottom:0,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            pointerEvents:"none",
+          }}>
+            <span style={{ fontSize:13, fontWeight:500, color:C.text }}>
+              {c1.name ? `Device ${c1.name} – ` : ""}
+              {breadcrumb ? breadcrumb.map((b,i)=>(
+                <span key={i}>
+                  {i > 0 && <span> / </span>}
+                  <span>{b.label}</span>
                 </span>
-              ))}
-            </>
-          ) : (
-            <span style={{ fontSize:11, fontWeight:500, color:C.text }}>
-              {tab === "builder"  ? "Menu builder" :
-               tab === "devices"  ? "3rd party devices" :
-               tab === "settings" ? "Device settings" :
-               tab === "push"     ? "Push to device" : ""}
+              )) : tabLabel}
             </span>
-          )}
+          </div>
+
           <div style={{ flex:1 }} />
+
+          {/* Push button — right-anchored */}
           <button
             onClick={() => { setTab("push"); pushRunRef.current?.(); }}
             style={{
-              height:24, padding:"0 10px", borderRadius:4,
-              border:`1px solid ${C.border}`,
-              background: tab === "push" ? C.accent : C.s1,
-              color: tab === "push" ? "#0b0d14" : C.mid,
-              fontSize:11, fontWeight:500, cursor:"pointer",
+              height:26, padding:"0 12px", borderRadius:5,
+              border: tab === "push" ? "1px solid #56578f" : "1px solid #9a9a9a",
+              background: tab === "push"
+                ? "linear-gradient(to bottom, #d4e9fc 0%, #a1d1f9 50%, #87c5fb 50%, #d3f7fd 100%)"
+                : "linear-gradient(to bottom, #ffffff 0%, #f3f3f3 50%, #ececec 50%, #ebebeb 100%)",
+              color: C.text,
+              fontSize:12, fontWeight:400, cursor:"pointer",
               display:"flex", alignItems:"center", gap:5,
-              transition:"all .12s",
+              boxShadow: tab === "push"
+                ? "inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 0 rgba(0,0,0,0.12)"
+                : "inset 0 1px 0 rgba(255,255,255,1), 0 1px 0 rgba(0,0,0,0.09)",
+              textShadow:"0 1px 0 rgba(255,255,255,0.8)",
             }}
           >
             <ArrowUp size={11} /> Push
           </button>
-          <span style={{ fontSize:10, color:C.dim, fontFamily:MONO, marginLeft:8 }}>
-            {c1.name}
-          </span>
-        </div>
+        </div>}
 
-        {/* Loading bar */}
-        <div style={{ height:2, flexShrink:0, background:C.s1, overflow:"hidden" }}>
+        {/* Sync progress bar (non-blocking) */}
+        <div style={{ height:2, flexShrink:0, background:C.s2, overflow:"hidden" }}>
           {syncing && (
             <div style={{
               height:"100%", background:C.accent,
@@ -672,17 +784,114 @@ export default function App() {
         </div>
 
         {/* Tab content */}
-        <div style={{ flex:1, overflow:"hidden", minHeight:0, position:"relative" }}>
-          {syncing && (
+        <div style={{ flex:1, overflow:"hidden", minHeight:0, position:"relative", background:C.s1 }}>
+          {/* Pick-a-unit modal for "Open Config" when multiple Axons are discovered */}
+          {pickingC1 && (
             <div style={{
               position:"absolute", inset:0, zIndex:20,
-              background:"rgba(10,11,18,0.55)",
+              background:"rgba(0,0,0,0.25)",
+              backdropFilter:"blur(2px)",
               display:"flex", alignItems:"center", justifyContent:"center",
+            }} onClick={() => setPickingC1(false)}>
+              <div style={{
+                background:C.s1, border:`1px solid ${C.border}`,
+                boxShadow:"0 4px 20px rgba(0,0,0,.18)",
+                padding:"20px", minWidth:240,
+                display:"flex", flexDirection:"column", gap:12,
+              }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text }}>Select a device to configure</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                  {c1List.map(unit => (
+                    <button key={unit.id} onClick={() => {
+                      setSelectedC1(unit.id);
+                      setTab("push");
+                      setPickingC1(false);
+                    }} style={{
+                      background:"none", border:`1px solid ${C.border}`,
+                      padding:"7px 12px", cursor:"pointer",
+                      textAlign:"left", fontSize:13, color:C.text,
+                      fontFamily:SANS,
+                    }}>
+                      <div style={{ fontWeight:500 }}>{unit.name || unit.id}</div>
+                      {unit.ip && <div style={{ fontSize:11, color:C.dim }}>{unit.ip}</div>}
+                    </button>
+                  ))}
+                </div>
+                <Btn onClick={() => setPickingC1(false)}>Cancel</Btn>
+              </div>
+            </div>
+          )}
+
+          {/* Non-blocking loading veil: dims content while sync is in progress */}
+          {syncing && (
+            <div style={{
+              position:"absolute", inset:0, zIndex:10,
+              background: `${C.bg}99`,
               backdropFilter:"blur(1px)",
-              pointerEvents:"all",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              pointerEvents:"none",
             }}>
-              <div style={{ fontSize:12, color:C.dim, letterSpacing:"0.1em", textTransform:"uppercase" }}>
-                Syncing device…
+              <div style={{ display:"flex", alignItems:"center", gap:8, background:C.s1,
+                border:`1px solid ${C.border}`, padding:"7px 14px",
+                boxShadow:"0 2px 8px rgba(0,0,0,.08)",
+              }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" style={{ animation:"spin .9s linear infinite", flexShrink:0 }}>
+                  <circle cx="7" cy="7" r="5.5" fill="none" stroke={C.border} strokeWidth="2"/>
+                  <path d="M7 1.5a5.5 5.5 0 0 1 5.5 5.5" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+                <span style={{ fontSize:11, color:C.mid }}>Loading config…</span>
+              </div>
+            </div>
+          )}
+          {tab==="home" && (
+            <div style={{
+              flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:64, padding:"0 48px", position:"relative", height:"100%", overflow:"hidden",
+              background:[
+                `radial-gradient(at 50% 120%, rgba(255,255,255,0.4) 0px, transparent 50%)`,
+                `radial-gradient(at 96.4% 100%, rgba(105,177,229,0.4) 0px, transparent 50%)`,
+                `radial-gradient(at 64.1% 100%, rgba(238,238,238,0.4) 0px, transparent 50%)`,
+                `radial-gradient(at 20.9% 100%, rgba(170,170,170,0.4) 0px, transparent 50%)`,
+                `radial-gradient(at 14.8% 97.7%, rgba(255,255,255,0.4) 0px, transparent 50%)`,
+                `radial-gradient(at 62.1% 82.8%, rgba(170,170,170,0.4) 0px, transparent 50%)`,
+              ].join(",") + " #fff",
+            }}>
+              <div style={{
+                position:"absolute", inset:0, pointerEvents:"none",
+                backgroundImage:`url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><defs><filter id='n' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'><feTurbulence type='fractalNoise' baseFrequency='0.3' numOctaves='3' stitchTiles='stitch' result='t'/><feColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.48 0 0 0 -0.126' in='t' result='g'/></filter></defs><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")`,
+                backgroundSize:"6.5%",
+                backgroundPosition:"center",
+                backgroundRepeat:"repeat",
+                opacity:0.2,
+              }} />
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16, flexShrink:0 }}>
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
+                  <AxonLogo scale={2.2} />
+                  <div style={{ fontSize:28, fontWeight:300, color:C.dim, fontFamily:SANS, letterSpacing:"0.02em", lineHeight:1, paddingLeft:41, marginTop:3 }}>configurator</div>
+                </div>
+                <div style={{ fontSize:28, fontWeight:300, color:C.text, fontFamily:SANS, letterSpacing:"-0.02em", marginTop:16 }}>Welcome.</div>
+              </div>
+              <div style={{ width:1, height:160, background:C.border, flexShrink:0 }} />
+              <div style={{ display:"flex", flexDirection:"column", gap:20, maxWidth:280 }}>
+                <div style={{ fontSize:15, fontWeight:500, color:C.text }}>Start in just 3 easy steps:</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  {[
+                    { n:"1.", text:"Plug your Axon C1 into the network." },
+                    { n:"2.", text:"Select your Network Interface in the sidebar. This tells the app which adapter to scan." },
+                    { n:"3.", text:"Hit Scan and your device pops up automatically. That's it!" },
+                  ].map(s => (
+                    <div key={s.n} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:C.dim, flexShrink:0, minWidth:16 }}>{s.n}</div>
+                      <div style={{ fontSize:13, color:C.mid, lineHeight:1.5 }}>{s.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display:"flex", gap:8, marginTop:4 }}>
+                  <Btn variant="primary" onClick={openConfig}>{c1List.length > 0 ? "Open Config" : "Open Config Offline"}</Btn>
+                  <Btn onClick={() => {}}>Simulator Mode</Btn>
+                </div>
+              </div>
+              <div style={{ position:"absolute", bottom:12, left:0, right:0, textAlign:"center", fontSize:10, color:C.dim, opacity:0.5, fontFamily:SANS, padding:"0 48px", lineHeight:1.6 }}>
+                This is an independent, community-built tool and is not affiliated with, endorsed by, or sponsored by Attero Tech, QSC, or any of their subsidiaries, partners, or related parties. All product names and trademarks are the property of their respective owners.
               </div>
             </div>
           )}
@@ -720,8 +929,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Console -- draggable resizable drawer */}
-        {(() => {
+        {/* Console — draggable resizable drawer */}
+        {tab !== "home" && (() => {
           const collapsed = consoleH <= 32;
           const onDragStart = (e) => {
             e.preventDefault();
@@ -755,14 +964,14 @@ export default function App() {
                   cursor:"ns-resize", userSelect:"none",
                 }}
               >
-                <div style={{ padding:"0 10px", display:"flex", flexDirection:"column", gap:2.5, opacity:.3 }}>
+                <div style={{ padding:"0 10px", display:"flex", flexDirection:"column", gap:2.5, opacity:.25 }}>
                   {[0,1].map(r=>(
                     <div key={r} style={{ display:"flex", gap:2.5 }}>
-                      {[0,1,2,3,4].map(i=><div key={i} style={{width:2.5,height:1.5,borderRadius:1,background:C.mid}}/>)}
+                      {[0,1,2,3,4].map(i=><div key={i} style={{width:2.5,height:1.5,background:C.mid}}/>)}
                     </div>
                   ))}
                 </div>
-                <span style={{ fontSize:10, fontWeight:500, color:C.dim, fontFamily:MONO, flex:1 }}>console</span>
+                <span style={{ fontSize:14, fontWeight:800, color:"rgb(99,99,115)", fontFamily:SANS, flex:1 }}>Console</span>
                 <span
                   onClick={e => { e.stopPropagation(); setConsoleH(h => h <= 32 ? 180 : 32); }}
                   style={{ color:C.dim, padding:"0 14px", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}
@@ -780,25 +989,19 @@ export default function App() {
       </div>
 
       {/* PREVIEW RAIL */}
-      <div style={{
+      {tab !== "home" && <div style={{
         width:256, flexShrink:0,
         borderLeft:`1px solid ${C.border}`, background:C.s0,
         display:"flex", flexDirection:"column", overflow:"hidden",
       }}>
         <div style={{
-          height:36, flexShrink:0,
-          borderBottom:`1px solid ${C.border}`,
-          display:"flex", alignItems:"center", padding:"0 14px", gap:8,
-        }}>
-          <span style={{
-            width:6, height:6, borderRadius:"50%", background:C.sage,
-            boxShadow:`0 0 5px ${C.sage}`, flexShrink:0, display:"inline-block",
-          }} />
-          <span style={{ fontSize:10, fontWeight:500, color:C.dim, fontFamily:MONO, flex:1 }}>preview</span>
-          <span style={{ fontSize:9, color:C.dim, fontFamily:MONO }}>locked</span>
-        </div>
+          height:52, flexShrink:0,
+          borderBottom:"1px solid #444",
+          background:"linear-gradient(to bottom,#e9e9e9 0%,#bbbabb 100%)",
+          boxShadow:"0 0 10px #141414",
+        }} />
         {simPanel}
-      </div>
+      </div>}
 
     </div>
   );
