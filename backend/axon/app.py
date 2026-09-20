@@ -45,7 +45,10 @@ def create_app() -> web.Application:
     app.router.add_get ("/ws/_discovery",              ws_discovery_handler)
     app.router.add_get ("/ws/{ip}",                    ws_handler)
     if STATIC_DIR.exists():
-        app.router.add_static("/", path=str(STATIC_DIR), show_index=True)
+        async def index(_):
+            return web.FileResponse(STATIC_DIR / "index.html")
+        app.router.add_get("/", index)
+        app.router.add_static("/", path=str(STATIC_DIR), show_index=False)
     else:
         log.warning("frontend/dist not found -- run npm run build in frontend/")
     return app
