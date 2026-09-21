@@ -285,7 +285,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
           </div>
         ) : (
           <div style={{ color:C.lcd, textAlign:"center", fontSize:10, fontFamily:MONO,
-            flexShrink:0, height:13, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            flexShrink:0, minHeight:13, padding:"1px 0", display:"flex", alignItems:"center", justifyContent:"center" }}>
             {(volMuteScreen?.level_vol?.levelPreStr ?? "")}{volStr(activeFaderVol)}{(volMuteScreen?.level_vol?.levelPostStr ?? "")}
           </div>
         )}
