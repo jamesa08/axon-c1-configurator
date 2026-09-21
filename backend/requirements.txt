@@ -1,3 +1,4 @@
 aiohttp>=3.9.0
 zeroconf>=0.115.0
 pywebview>=6.1
+psutil>=5.9.0

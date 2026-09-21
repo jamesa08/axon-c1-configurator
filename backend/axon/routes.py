@@ -28,22 +28,29 @@ async def api_interfaces(req: web.Request) -> web.Response:
     """GET /api/interfaces -- list available network interfaces with IPv4 addresses."""
     interfaces = []
     try:
-        import netifaces
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+        import psutil
+        for iface, addrs in psutil.net_if_addrs().items():
             for a in addrs:
-                ip = a.get("addr", "")
-                if ip and not ip.startswith("127."):
-                    interfaces.append({"name": iface, "ip": ip})
+                if a.family == socket.AF_INET and not a.address.startswith("127."):
+                    interfaces.append({"name": iface, "ip": a.address})
     except ImportError:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("10.255.255.255", 1))
-            ip = s.getsockname()[0]
-            s.close()
-            interfaces.append({"name": "default", "ip": ip})
-        except Exception:
-            interfaces.append({"name": "default", "ip": "0.0.0.0"})
+            import netifaces
+            for iface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+                for a in addrs:
+                    ip = a.get("addr", "")
+                    if ip and not ip.startswith("127."):
+                        interfaces.append({"name": iface, "ip": ip})
+        except ImportError:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("10.255.255.255", 1))
+                ip = s.getsockname()[0]
+                s.close()
+                interfaces.append({"name": "default", "ip": ip})
+            except Exception:
+                interfaces.append({"name": "default", "ip": "0.0.0.0"})
 
     if not interfaces:
         interfaces.append({"name": "default", "ip": "0.0.0.0"})
