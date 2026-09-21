@@ -36,6 +36,8 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
+          # Build psutil as universal2 fat binary from source
+          ARCHFLAGS="-arch x86_64 -arch arm64" pip install --no-binary :all: psutil
           # Force-install universal2 wheels for packages with native extensions
           pip download \
             --platform macosx_10_13_universal2 \
