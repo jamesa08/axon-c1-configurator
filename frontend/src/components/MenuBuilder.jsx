@@ -754,12 +754,12 @@ export default function MenuBuilder({ config, setConfig, onSimCursorChange, simS
           return typeLabel ? (
             <div style={{
               position:"absolute", right:8, top:8,
-              pointerEvents:"none", overflow:"hidden",
+              pointerEvents:"none",
               lineHeight:1, zIndex:0,
             }}>
               <span style={{
                 fontSize:90, fontWeight:100, fontStyle:"italic",
-                color:C.border, opacity:0.5, lineHeight:1,
+                color:C.border, opacity:0.5, lineHeight:0.944,
                 userSelect:"none", whiteSpace:"nowrap", display:"block", height:100,
               }}>{typeLabel}</span>
             </div>

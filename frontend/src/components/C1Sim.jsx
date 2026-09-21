@@ -262,7 +262,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
                 }}>
                 {e ? (
                   <>
-                    <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:9.5, lineHeight:1 }}>
+                    <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:9.5, lineHeight:1.053 }}>
                       {e.display_txt}
                     </span>
                     {showUp    && <span style={{ fontSize:8, flexShrink:0 }}>^</span>}
@@ -285,7 +285,7 @@ export default function C1Sim({ config, simNavPath, simState, onSimStateChange, 
           </div>
         ) : (
           <div style={{ color:C.lcd, textAlign:"center", fontSize:10, fontFamily:MONO,
-            flexShrink:0, minHeight:13, padding:"1px 0", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            flexShrink:0, minHeight:13, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
             {(volMuteScreen?.level_vol?.levelPreStr ?? "")}{volStr(activeFaderVol)}{(volMuteScreen?.level_vol?.levelPostStr ?? "")}
           </div>
         )}
