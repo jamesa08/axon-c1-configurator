@@ -192,7 +192,7 @@ export default function PushPanel({ config, setConfig, runRef, onPushResult }) {
           {importing ? "Importing..." : "Import .cfg"}
         </Btn>
         <input
-          ref={fileRef} type="file" accept=".cfg,application/xml,text/xml"
+          ref={fileRef} type="file" accept=".cfg,.xml,application/xml,text/xml,text/plain,application/octet-stream"
           style={{ display:"none" }}
           onChange={e => { const f=e.target.files?.[0]; if(f) handleImport(f); e.target.value=""; }}
         />
