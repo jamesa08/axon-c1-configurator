@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { C, SANS } from "../tokens.js";
-import { ChevronLeft, ChevronRight, RefreshCw, Play, ChevronUp, ChevronDown, SlidersHorizontal, FolderOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Play, ChevronUp, ChevronDown, SlidersHorizontal, FolderOpen, Pencil } from "lucide-react";
 import { Btn, Tag, FieldRow, HR, SectionHead } from "./Primitives.jsx";
 import TreeItem from "./TreeItem.jsx";
 import LevelConfigPanel from "./LevelConfigPanel.jsx";
@@ -18,7 +18,7 @@ function EditableTitle({ value, onChange }) {
   const commit = () => { setEditing(false); if (val.trim()) onChange(val.trim().slice(0,16)); else setVal(value); };
   const sharedStyle = { fontSize:14, fontWeight:600, fontFamily:SANS, lineHeight:"20px", height:20, display:"block" };
   return (
-    <div style={{ height:20, position:"relative" }}>
+    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
       {editing
         ? <input ref={ref} autoFocus value={val}
             onChange={e => setVal(e.target.value.slice(0,16))}
@@ -26,9 +26,15 @@ function EditableTitle({ value, onChange }) {
             onKeyDown={e => { if(e.key==="Enter") commit(); if(e.key==="Escape"){ setEditing(false); setVal(value); }}}
             style={{ ...sharedStyle, color:C.text, background:"transparent", border:"none",
               borderBottom:`1px solid ${C.accent}`, outline:"none", padding:0, minWidth:60, width:"auto" }} />
-        : <span style={{ ...sharedStyle, color:C.text, cursor:"text" }}
-            onDoubleClick={() => setEditing(true)}
-            title="Double-click to rename">{value}</span>
+        : <>
+            <span style={{ ...sharedStyle, color:C.text }}>{value}</span>
+            <button onClick={() => setEditing(true)} title="Rename"
+              style={{ background:"none", border:"none", padding:0, cursor:"pointer",
+                color:C.dim, display:"flex", alignItems:"center", flexShrink:0,
+                marginTop:1 }}>
+              <Pencil size={12} />
+            </button>
+          </>
       }
     </div>
   );
